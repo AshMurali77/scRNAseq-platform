@@ -1,8 +1,5 @@
 import logging
-import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-
-logging.basicConfig(level=logging.INFO)
 
 from app.models.schemas import CellMetadata, MarkerGene, PipelineParams, PipelineResult
 from app.pipeline.annotate import run_celltypist, run_marker_genes
@@ -12,6 +9,8 @@ from app.pipeline.qc import run_qc
 from app.pipeline.reduce import run_reduce
 from app.utils.errors import PipelineStepError
 from app.utils.io import load_h5ad, stage_upload
+
+logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="scRNA-seq Annotation Platform")
 
