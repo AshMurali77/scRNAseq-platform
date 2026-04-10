@@ -14,10 +14,10 @@ type AppState =
 export default function App() {
   const [state, setState] = useState<AppState>({ status: 'idle' })
 
-  async function handleSubmit(file: File) {
+  async function handleSubmit(file: File, tissue: string, organism: string) {
     setState({ status: 'loading' })
     try {
-      const result = await analyze(file)
+      const result = await analyze(file, tissue, organism)
       setState({ status: 'done', result })
     } catch (err) {
       setState({ status: 'error', message: err instanceof Error ? err.message : 'Unknown error' })

@@ -1,8 +1,8 @@
 import logging
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
-from app.models.schemas import CellMetadata, MarkerGene, PipelineParams, PipelineResult
-from app.pipeline.annotate import run_celltypist, run_marker_genes
+from app.models.schemas import CellMetadata, ClusterSummary, MarkerGene, PipelineParams, PipelineResult
+from app.pipeline.annotate import run_celltypist, run_marker_genes, select_model
 from app.pipeline.cluster import run_cluster
 from app.pipeline.normalize import run_normalize
 from app.pipeline.qc import run_qc
@@ -32,8 +32,10 @@ async def analyze(
         UMAP coordinates, and marker genes.
 
     Raises:
-        422: If params JSON is malformed or fails validation.
-        400: If any pipeline step fails (e.g. bad file, all cells filtered out).
+        422: If params JSON is malformed, fails validation, or tissue/organism
+             are missing.
+        400: If any pipeline step fails (e.g. bad file, unsupported tissue/organism
+             combination, all cells filtered out).
     """
     try:
         pipeline_params = PipelineParams.model_validate_json(params)
@@ -65,14 +67,15 @@ async def analyze(
         )
         adata = run_cluster(adata, resolution=pipeline_params.leiden_resolution)
         adata = run_marker_genes(adata, n_genes=pipeline_params.n_marker_genes)
-        adata = run_celltypist(adata, model=pipeline_params.celltypist_model)
+        model_selection = select_model(pipeline_params.tissue, pipeline_params.organism)
+        adata = run_celltypist(adata, model=model_selection.model_name)
 
     except PipelineStepError as e:
         raise HTTPException(status_code=400, detail=str(e))
     finally:
         tmp_path.unlink(missing_ok=True)
 
-    return _build_result(adata, n_cells_input, n_cells_after_qc, n_hvgs)
+    return _build_result(adata, n_cells_input, n_cells_after_qc, n_hvgs, model_selection)
 
 
 def _build_result(
@@ -80,6 +83,7 @@ def _build_result(
     n_cells_input: int,
     n_cells_after_qc: int,
     n_hvgs: int,
+    model_selection,
 ) -> PipelineResult:
     """Assemble a PipelineResult from a fully annotated AnnData object.
 
@@ -88,6 +92,7 @@ def _build_result(
         n_cells_input: Cell count before QC filtering.
         n_cells_after_qc: Cell count after QC filtering.
         n_hvgs: Number of highly variable genes selected.
+        model_selection: ModelSelection returned by select_model().
 
     Returns:
         PipelineResult ready for serialization.
@@ -105,6 +110,7 @@ def _build_result(
         for i, cell_id in enumerate(adata.obs_names)
     ]
 
+    cluster_summaries = _extract_cluster_summaries(adata)
     marker_genes = _extract_marker_genes(adata)
 
     return PipelineResult(
@@ -112,9 +118,35 @@ def _build_result(
         n_cells_after_qc=n_cells_after_qc,
         n_hvgs=n_hvgs,
         n_clusters=int(adata.obs["leiden"].nunique()),
+        model_display_name=model_selection.display_name,
+        model_description=model_selection.description,
+        cluster_summaries=cluster_summaries,
         cells=cells,
         marker_genes=marker_genes,
     )
+
+
+def _extract_cluster_summaries(adata) -> list[ClusterSummary]:
+    """Build a per-cluster label summary from majority-voted CellTypist labels.
+
+    With majority_voting=True all cells in the same Leiden cluster share the
+    same label, so we take the mode per cluster as a safe fallback.
+
+    Args:
+        adata: AnnData object with 'leiden' and 'celltypist_cell_type' in obs.
+
+    Returns:
+        List of ClusterSummary sorted by cluster id.
+    """
+    summary = (
+        adata.obs.groupby("leiden", observed=True)["celltypist_cell_type"]
+        .agg(lambda s: s.mode()[0])
+        .reset_index()
+    )
+    return [
+        ClusterSummary(cluster_id=str(row["leiden"]), celltypist_label=str(row["celltypist_cell_type"]))
+        for _, row in summary.iterrows()
+    ]
 
 
 def _extract_marker_genes(adata) -> list[MarkerGene]:

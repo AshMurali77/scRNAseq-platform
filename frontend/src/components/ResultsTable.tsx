@@ -14,7 +14,8 @@ export default function ResultsTable({ result }: Props) {
   const visible: CellMetadata[] = result.cells.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-6">
+      {/* Summary stats */}
       <div className="grid grid-cols-4 gap-3">
         <Stat label="Cells (input)" value={result.n_cells_input} />
         <Stat label="Cells (post-QC)" value={result.n_cells_after_qc} />
@@ -22,46 +23,79 @@ export default function ResultsTable({ result }: Props) {
         <Stat label="Clusters" value={result.n_clusters} />
       </div>
 
-      <div className="overflow-x-auto rounded-lg border border-gray-200">
-        <table className="min-w-full divide-y divide-gray-200 text-sm">
-          <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
-            <tr>
-              <Th>Cell ID</Th>
-              <Th>Cluster</Th>
-              <Th>Cell Type</Th>
-              <Th>UMAP X</Th>
-              <Th>UMAP Y</Th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100 bg-white">
-            {visible.map((cell) => (
-              <tr key={cell.cell_id} className="hover:bg-gray-50">
-                <td className="px-4 py-2 font-mono text-xs text-gray-600">{cell.cell_id}</td>
-                <td className="px-4 py-2">{cell.leiden_cluster}</td>
-                <td className="px-4 py-2">{cell.celltypist_cell_type}</td>
-                <td className="px-4 py-2 tabular-nums">{cell.umap_x.toFixed(3)}</td>
-                <td className="px-4 py-2 tabular-nums">{cell.umap_y.toFixed(3)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {/* Model used */}
+      <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3">
+        <p className="text-xs font-medium text-blue-700">Model used: {result.model_display_name}</p>
+        <p className="mt-0.5 text-xs text-blue-600">{result.model_description}</p>
       </div>
 
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between text-sm text-gray-600">
-          <span>
-            Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, result.cells.length)} of {result.cells.length} cells
-          </span>
-          <div className="flex gap-2">
-            <PageButton onClick={() => setPage((p) => p - 1)} disabled={page === 0}>
-              Previous
-            </PageButton>
-            <PageButton onClick={() => setPage((p) => p + 1)} disabled={page === totalPages - 1}>
-              Next
-            </PageButton>
-          </div>
+      {/* Cluster summary */}
+      <div>
+        <h3 className="mb-2 text-xs font-medium text-gray-700">Cluster annotations</h3>
+        <div className="overflow-x-auto rounded-lg border border-gray-200">
+          <table className="min-w-full divide-y divide-gray-200 text-sm">
+            <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+              <tr>
+                <Th>Cluster</Th>
+                <Th>Cell type (majority vote)</Th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 bg-white">
+              {result.cluster_summaries.map((cs) => (
+                <tr key={cs.cluster_id} className="hover:bg-gray-50">
+                  <td className="px-4 py-2 font-medium">{cs.cluster_id}</td>
+                  <td className="px-4 py-2">{cs.celltypist_label}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      )}
+      </div>
+
+      {/* Per-cell table */}
+      <div>
+        <h3 className="mb-2 text-xs font-medium text-gray-700">Per-cell results</h3>
+        <div className="overflow-x-auto rounded-lg border border-gray-200">
+          <table className="min-w-full divide-y divide-gray-200 text-sm">
+            <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+              <tr>
+                <Th>Cell ID</Th>
+                <Th>Cluster</Th>
+                <Th>Cell Type</Th>
+                <Th>UMAP X</Th>
+                <Th>UMAP Y</Th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 bg-white">
+              {visible.map((cell) => (
+                <tr key={cell.cell_id} className="hover:bg-gray-50">
+                  <td className="px-4 py-2 font-mono text-xs text-gray-600">{cell.cell_id}</td>
+                  <td className="px-4 py-2">{cell.leiden_cluster}</td>
+                  <td className="px-4 py-2">{cell.celltypist_cell_type}</td>
+                  <td className="px-4 py-2 tabular-nums">{cell.umap_x.toFixed(3)}</td>
+                  <td className="px-4 py-2 tabular-nums">{cell.umap_y.toFixed(3)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {totalPages > 1 && (
+          <div className="mt-3 flex items-center justify-between text-sm text-gray-600">
+            <span>
+              Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, result.cells.length)} of {result.cells.length} cells
+            </span>
+            <div className="flex gap-2">
+              <PageButton onClick={() => setPage((p) => p - 1)} disabled={page === 0}>
+                Previous
+              </PageButton>
+              <PageButton onClick={() => setPage((p) => p + 1)} disabled={page === totalPages - 1}>
+                Next
+              </PageButton>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

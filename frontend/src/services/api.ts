@@ -1,9 +1,9 @@
 import type { PipelineResult } from '../types/pipeline'
 
-export async function analyze(file: File, params: string = '{}'): Promise<PipelineResult> {
+export async function analyze(file: File, tissue: string, organism: string): Promise<PipelineResult> {
   const formData = new FormData()
   formData.append('file', file)
-  formData.append('params', params)
+  formData.append('params', JSON.stringify({ tissue, organism }))
 
   const response = await fetch('/analyze', {
     method: 'POST',
