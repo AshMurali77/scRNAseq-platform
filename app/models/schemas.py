@@ -5,6 +5,7 @@ class QCParams(BaseModel):
     min_genes: int = Field(200, description="Minimum genes expressed per cell.")
     max_genes: int = Field(5000, description="Maximum genes expressed per cell.")
     max_pct_mt: float = Field(20.0, description="Maximum mitochondrial count percentage.")
+    min_cells: int = Field(3, description="Minimum cells a gene must be expressed in.")
 
 
 class PipelineParams(BaseModel):

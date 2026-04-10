@@ -1,4 +1,7 @@
 import anndata as ad
+import scanpy as sc
+
+from app.utils.errors import PipelineStepError
 
 
 def run_reduce(
@@ -9,14 +12,30 @@ def run_reduce(
     """Run PCA, compute neighbor graph, and generate UMAP embedding.
 
     Args:
-        adata: Normalized AnnData object with HVGs.
+        adata: Normalized AnnData object subsetted to HVGs.
         n_pcs: Number of principal components to compute.
         n_neighbors: Number of neighbors for the kNN graph.
 
     Returns:
-        AnnData object with PCA, neighbors, and UMAP results stored.
+        AnnData object with obsm['X_pca'], obsp['connectivities'], and
+        obsm['X_umap'] populated.
 
     Raises:
-        PipelineStepError: If dimensionality reduction fails.
+        PipelineStepError: If any dimensionality reduction step fails.
     """
-    pass
+    try:
+        sc.pp.pca(adata, n_comps=n_pcs)
+    except Exception as e:
+        raise PipelineStepError("reduce", f"PCA failed: {e}") from e
+
+    try:
+        sc.pp.neighbors(adata, n_neighbors=n_neighbors, n_pcs=n_pcs)
+    except Exception as e:
+        raise PipelineStepError("reduce", f"Neighbor graph failed: {e}") from e
+
+    try:
+        sc.tl.umap(adata)
+    except Exception as e:
+        raise PipelineStepError("reduce", f"UMAP failed: {e}") from e
+
+    return adata

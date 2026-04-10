@@ -4,4 +4,6 @@ python-multipart
 anndata
 scanpy
 celltypist
+leidenalg
+python-igraph
 pydantic
