@@ -1,17 +1,26 @@
 import { useState } from 'react'
-import type { CellMetadata, PipelineResult } from '../types/pipeline'
+import type { CellMetadata, ModelSelection, PipelineResult } from '../types/pipeline'
 
 const PAGE_SIZE = 50
 
 interface Props {
   result: PipelineResult
+  modelSelection: ModelSelection
 }
 
-export default function ResultsTable({ result }: Props) {
+export default function ResultsTable({ result, modelSelection }: Props) {
   const [page, setPage] = useState(0)
 
   const totalPages = Math.ceil(result.cells.length / PAGE_SIZE)
   const visible: CellMetadata[] = result.cells.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+
+  const confidencePct = Math.round(modelSelection.confidence * 100)
+  const confidenceColor =
+    modelSelection.confidence >= 0.85
+      ? 'text-green-700'
+      : modelSelection.confidence >= 0.7
+        ? 'text-amber-700'
+        : 'text-red-700'
 
   return (
     <div className="flex flex-col gap-6">
@@ -23,10 +32,18 @@ export default function ResultsTable({ result }: Props) {
         <Stat label="Clusters" value={result.n_clusters} />
       </div>
 
-      {/* Model used */}
-      <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3">
-        <p className="text-xs font-medium text-blue-700">Model used: {result.model_display_name}</p>
-        <p className="mt-0.5 text-xs text-blue-600">{result.model_description}</p>
+      {/* Model info */}
+      <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 flex flex-col gap-1">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-medium text-blue-700">
+            Model: {modelSelection.display_name}
+          </p>
+          <span className={`text-xs font-medium ${confidenceColor}`}>
+            {confidencePct}% confidence
+          </span>
+        </div>
+        <p className="text-xs text-blue-600">{modelSelection.description}</p>
+        <p className="text-xs text-blue-500 italic">{modelSelection.reasoning}</p>
       </div>
 
       {/* Cluster summary */}
@@ -51,6 +68,29 @@ export default function ResultsTable({ result }: Props) {
           </table>
         </div>
       </div>
+
+      {/* UMAP plots */}
+      {(result.plots.umap_clusters || result.plots.umap_celltypes) && (
+        <div>
+          <h3 className="mb-2 text-xs font-medium text-gray-700">UMAP projections</h3>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {result.plots.umap_clusters && (
+              <img
+                src={`data:image/png;base64,${result.plots.umap_clusters}`}
+                alt="UMAP coloured by Leiden cluster"
+                className="rounded-lg border border-gray-200 w-full"
+              />
+            )}
+            {result.plots.umap_celltypes && (
+              <img
+                src={`data:image/png;base64,${result.plots.umap_celltypes}`}
+                alt="UMAP coloured by cell type"
+                className="rounded-lg border border-gray-200 w-full"
+              />
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Per-cell table */}
       <div>

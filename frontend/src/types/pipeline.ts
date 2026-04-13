@@ -8,12 +8,30 @@ export interface QCParams {
 export interface PipelineParams {
   tissue: string
   organism: string
-  qc: QCParams
-  n_top_genes: number
-  n_pcs: number
-  n_neighbors: number
-  leiden_resolution: number
-  n_marker_genes: number
+  model_name: string
+  qc?: Partial<QCParams>
+  n_top_genes?: number
+  n_pcs?: number
+  n_neighbors?: number
+  leiden_resolution?: number
+  n_marker_genes?: number
+}
+
+export interface ModelSelectionRequest {
+  tissue: string
+  organism: string
+  clarification?: string
+  use_llm?: boolean
+  clarification_round?: number
+}
+
+export interface ModelSelection {
+  model_name: string
+  display_name: string
+  description: string
+  reasoning: string
+  confidence: number
+  clarifying_question: string | null
 }
 
 export interface CellMetadata {
@@ -47,4 +65,5 @@ export interface PipelineResult {
   cluster_summaries: ClusterSummary[]
   cells: CellMetadata[]
   marker_genes: MarkerGene[]
+  plots: Record<string, string>
 }

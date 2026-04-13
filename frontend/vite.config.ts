@@ -6,6 +6,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/analyze': 'http://127.0.0.1:8000',
+      '/select-model': 'http://127.0.0.1:8000',
     },
   },
 })
