@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { CellMetadata, ModelSelection, PipelineResult } from '../types/pipeline'
+import UmapPlot from './UmapPlot'
 
 const PAGE_SIZE = 50
 
@@ -10,9 +11,9 @@ interface Props {
 
 export default function ResultsTable({ result, modelSelection }: Props) {
   const [page, setPage] = useState(0)
-
-  const totalPages = Math.ceil(result.cells.length / PAGE_SIZE)
-  const visible: CellMetadata[] = result.cells.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+  const [filterCluster, setFilterCluster] = useState('')
+  const [filterCellType, setFilterCellType] = useState('')
+  const [selectedCellId, setSelectedCellId] = useState<string | null>(null)
 
   const confidencePct = Math.round(modelSelection.confidence * 100)
   const confidenceColor =
@@ -21,6 +22,42 @@ export default function ResultsTable({ result, modelSelection }: Props) {
       : modelSelection.confidence >= 0.7
         ? 'text-amber-700'
         : 'text-red-700'
+
+  // Cluster id → majority-vote annotation label
+  const clusterLabelMap = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const cs of result.cluster_summaries) map[cs.cluster_id] = cs.celltypist_label
+    return map
+  }, [result.cluster_summaries])
+
+  // Unique values for filter dropdowns
+  const clusterOptions = useMemo(
+    () => [...new Set(result.cells.map((c) => c.leiden_cluster))].sort((a, b) => +a - +b),
+    [result.cells],
+  )
+  const cellTypeOptions = useMemo(
+    () => [...new Set(result.cells.map((c) => c.celltypist_cell_type))].sort(),
+    [result.cells],
+  )
+
+  // Filtered cell list (resets page via key on filter change)
+  const filtered = useMemo(() => {
+    return result.cells.filter((c) => {
+      if (filterCluster && c.leiden_cluster !== filterCluster) return false
+      if (filterCellType && c.celltypist_cell_type !== filterCellType) return false
+      return true
+    })
+  }, [result.cells, filterCluster, filterCellType])
+
+  function handleFilterChange(setter: (v: string) => void) {
+    return (e: React.ChangeEvent<HTMLSelectElement>) => {
+      setter(e.target.value)
+      setPage(0)
+    }
+  }
+
+  const totalPages = Math.ceil(filtered.length / PAGE_SIZE)
+  const visible: CellMetadata[] = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
 
   return (
     <div className="flex flex-col gap-6">
@@ -70,60 +107,107 @@ export default function ResultsTable({ result, modelSelection }: Props) {
       </div>
 
       {/* UMAP plots */}
-      {(result.plots.umap_clusters || result.plots.umap_celltypes) && (
+      {result.cells.length > 0 && (
         <div>
-          <h3 className="mb-2 text-xs font-medium text-gray-700">UMAP projections</h3>
+          <h3 className="mb-2 text-xs font-medium text-gray-700">
+            UMAP projections
+            {selectedCellId && (
+              <span className="ml-2 font-normal text-amber-600">
+                — cell <span className="font-mono">{selectedCellId}</span> highlighted
+              </span>
+            )}
+          </h3>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {result.plots.umap_clusters && (
-              <img
-                src={`data:image/png;base64,${result.plots.umap_clusters}`}
-                alt="UMAP coloured by Leiden cluster"
-                className="rounded-lg border border-gray-200 w-full"
-              />
-            )}
-            {result.plots.umap_celltypes && (
-              <img
-                src={`data:image/png;base64,${result.plots.umap_celltypes}`}
-                alt="UMAP coloured by cell type"
-                className="rounded-lg border border-gray-200 w-full"
-              />
-            )}
+            <UmapPlot
+              cells={result.cells}
+              colorKey="leiden_cluster"
+              title="Leiden clusters"
+              highlightedCellId={selectedCellId}
+            />
+            <UmapPlot
+              cells={result.cells}
+              colorKey="celltypist_cell_type"
+              title="Cell type annotations"
+              highlightedCellId={selectedCellId}
+            />
           </div>
         </div>
       )}
 
       {/* Per-cell table */}
       <div>
-        <h3 className="mb-2 text-xs font-medium text-gray-700">Per-cell results</h3>
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <h3 className="text-xs font-medium text-gray-700">Per-cell results</h3>
+          <div className="flex items-center gap-2">
+            <FilterSelect
+              value={filterCluster}
+              onChange={handleFilterChange(setFilterCluster)}
+              placeholder="All clusters"
+              options={clusterOptions}
+              label={(v) => `Cluster ${v}`}
+            />
+            <FilterSelect
+              value={filterCellType}
+              onChange={handleFilterChange(setFilterCellType)}
+              placeholder="All cell types"
+              options={cellTypeOptions}
+              label={(v) => v}
+            />
+          </div>
+        </div>
+
         <div className="overflow-x-auto rounded-lg border border-gray-200">
-          <table className="min-w-full divide-y divide-gray-200 text-sm">
-            <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+          <table className="min-w-full divide-y divide-gray-200 text-xs">
+            <thead className="bg-gray-50 uppercase tracking-wide text-gray-500">
               <tr>
                 <Th>Cell ID</Th>
                 <Th>Cluster</Th>
+                <Th>Annotation</Th>
                 <Th>Cell Type</Th>
                 <Th>UMAP X</Th>
                 <Th>UMAP Y</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 bg-white">
-              {visible.map((cell) => (
-                <tr key={cell.cell_id} className="hover:bg-gray-50">
-                  <td className="px-4 py-2 font-mono text-xs text-gray-600">{cell.cell_id}</td>
-                  <td className="px-4 py-2">{cell.leiden_cluster}</td>
-                  <td className="px-4 py-2">{cell.celltypist_cell_type}</td>
-                  <td className="px-4 py-2 tabular-nums">{cell.umap_x.toFixed(3)}</td>
-                  <td className="px-4 py-2 tabular-nums">{cell.umap_y.toFixed(3)}</td>
+              {visible.map((cell) => {
+                const isSelected = cell.cell_id === selectedCellId
+                return (
+                  <tr
+                    key={cell.cell_id}
+                    onClick={() => setSelectedCellId(isSelected ? null : cell.cell_id)}
+                    className={`cursor-pointer transition-colors ${
+                      isSelected
+                        ? 'bg-amber-50 hover:bg-amber-100'
+                        : 'hover:bg-gray-50'
+                    }`}
+                  >
+                    <td className="px-3 py-1 font-mono text-gray-500 truncate max-w-[160px]" title={cell.cell_id}>
+                      {cell.cell_id}
+                    </td>
+                    <td className="px-3 py-1 tabular-nums">{cell.leiden_cluster}</td>
+                    <td className="px-3 py-1 text-gray-500">{clusterLabelMap[cell.leiden_cluster] ?? '—'}</td>
+                    <td className="px-3 py-1">{cell.celltypist_cell_type}</td>
+                    <td className="px-3 py-1 tabular-nums">{cell.umap_x.toFixed(3)}</td>
+                    <td className="px-3 py-1 tabular-nums">{cell.umap_y.toFixed(3)}</td>
+                  </tr>
+                )
+              })}
+              {visible.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-3 py-4 text-center text-gray-400">
+                    No cells match the current filters.
+                  </td>
                 </tr>
-              ))}
+              )}
             </tbody>
           </table>
         </div>
 
         {totalPages > 1 && (
-          <div className="mt-3 flex items-center justify-between text-sm text-gray-600">
+          <div className="mt-3 flex items-center justify-between text-xs text-gray-600">
             <span>
-              Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, result.cells.length)} of {result.cells.length} cells
+              Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filtered.length)} of{' '}
+              {filtered.length}{filtered.length !== result.cells.length ? ` (filtered from ${result.cells.length})` : ''} cells
             </span>
             <div className="flex gap-2">
               <PageButton onClick={() => setPage((p) => p - 1)} disabled={page === 0}>
@@ -150,7 +234,34 @@ function Stat({ label, value }: { label: string; value: number }) {
 }
 
 function Th({ children }: { children: React.ReactNode }) {
-  return <th className="px-4 py-3 text-left">{children}</th>
+  return <th className="px-3 py-2 text-left">{children}</th>
+}
+
+function FilterSelect({
+  value,
+  onChange,
+  placeholder,
+  options,
+  label,
+}: {
+  value: string
+  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
+  placeholder: string
+  options: string[]
+  label: (v: string) => string
+}) {
+  return (
+    <select
+      value={value}
+      onChange={onChange}
+      className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+    >
+      <option value="">{placeholder}</option>
+      {options.map((o) => (
+        <option key={o} value={o}>{label(o)}</option>
+      ))}
+    </select>
+  )
 }
 
 function PageButton({
