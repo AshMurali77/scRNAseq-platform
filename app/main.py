@@ -14,8 +14,11 @@ from app.models.schemas import (
     ModelSelectionRequest,
     PipelineParams,
     PipelineResult,
+    QueryRequest,
+    QueryResponse,
 )
 from app.pipeline.annotate import run_celltypist, run_marker_genes, select_model
+from app.pipeline.query import answer_query
 from app.pipeline.metadata import extract_and_check_metadata
 from app.pipeline.plot import generate_plots
 from app.pipeline.cluster import run_cluster
@@ -149,6 +152,32 @@ async def analyze(
         cluster_validations,
         dataset_metadata,
     )
+
+
+@app.post("/query", response_model=QueryResponse)
+async def query_endpoint(body: QueryRequest) -> QueryResponse:
+    """Answer a natural-language question about a completed pipeline run.
+
+    The caller passes the compressed pipeline context (QueryContext) along with
+    the question and any prior conversation turns. No server-side session state
+    is maintained — the full context travels with every request.
+
+    Args:
+        body: QueryRequest with question, conversation_history, and context.
+
+    Returns:
+        QueryResponse with the LLM's plain-text answer.
+
+    Raises:
+        400: If the LLM API call fails.
+    """
+    try:
+        answer = answer_query(
+            body.question, body.conversation_history, body.context
+        )
+        return QueryResponse(answer=answer)
+    except PipelineStepError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 def _build_result(

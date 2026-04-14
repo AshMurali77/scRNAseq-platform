@@ -1,4 +1,4 @@
-import type { ModelSelection, ModelSelectionRequest, PipelineResult } from '../types/pipeline'
+import type { ModelSelection, ModelSelectionRequest, PipelineResult, QueryRequest, QueryResponse } from '../types/pipeline'
 
 export async function selectModel(request: ModelSelectionRequest): Promise<ModelSelection> {
   const response = await fetch('/select-model', {
@@ -40,6 +40,27 @@ export async function analyze(
 
   if (!response.ok) {
     let message = `Request failed with status ${response.status}`
+    try {
+      const error = await response.json()
+      message = error.detail ?? message
+    } catch {
+      // empty or non-JSON body
+    }
+    throw new Error(message)
+  }
+
+  return response.json()
+}
+
+export async function queryPipeline(request: QueryRequest): Promise<QueryResponse> {
+  const response = await fetch('/query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+
+  if (!response.ok) {
+    let message = `Query failed with status ${response.status}`
     try {
       const error = await response.json()
       message = error.detail ?? message

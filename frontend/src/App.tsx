@@ -4,6 +4,7 @@ import { analyze, selectModel } from './services/api'
 import UploadForm from './components/UploadForm'
 import ResultsTable from './components/ResultsTable'
 import StatusBanner from './components/StatusBanner'
+import ChatPanel from './components/ChatPanel'
 
 type AppState =
   | { status: 'idle' }
@@ -21,7 +22,7 @@ type AppState =
     }
   | { status: 'loading' }
   | { status: 'error'; message: string }
-  | { status: 'done'; result: PipelineResult; modelSelection: ModelSelection }
+  | { status: 'done'; result: PipelineResult; modelSelection: ModelSelection; tissue: string; organism: string; useLlm: boolean }
 
 export default function App() {
   const [state, setState] = useState<AppState>({ status: 'idle' })
@@ -91,7 +92,7 @@ export default function App() {
     setState({ status: 'loading' })
     try {
       const result = await analyze(file, tissue, organism, modelSelection.model_name, skipQc, useLlm)
-      setState({ status: 'done', result, modelSelection })
+      setState({ status: 'done', result, modelSelection, tissue, organism, useLlm })
     } catch (err) {
       setState({ status: 'error', message: err instanceof Error ? err.message : 'Unknown error' })
     }
@@ -146,10 +147,26 @@ export default function App() {
         )}
 
         {state.status === 'done' && (
-          <div className="rounded-lg border border-gray-200 bg-white p-6">
-            <h2 className="mb-4 text-sm font-medium text-gray-700">Results</h2>
-            <ResultsTable result={state.result} modelSelection={state.modelSelection} />
-          </div>
+          <>
+            <div className="rounded-lg border border-gray-200 bg-white p-6">
+              <h2 className="mb-4 text-sm font-medium text-gray-700">Results</h2>
+              <ResultsTable result={state.result} modelSelection={state.modelSelection} />
+            </div>
+
+            {state.useLlm && (
+              <div className="rounded-lg border border-gray-200 bg-white p-6">
+                <h2 className="mb-1 text-sm font-medium text-gray-700">Ask about your results</h2>
+                <p className="mb-4 text-xs text-gray-400">
+                  Powered by Claude — has full access to your cluster annotations, marker genes, and expert validation.
+                </p>
+                <ChatPanel
+                  result={state.result}
+                  tissue={state.tissue}
+                  organism={state.organism}
+                />
+              </div>
+            )}
+          </>
         )}
       </main>
     </div>

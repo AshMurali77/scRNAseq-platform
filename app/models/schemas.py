@@ -109,6 +109,75 @@ class DatasetMetadata(BaseModel):
     organism_mismatch: bool = False
 
 
+class ConversationMessage(BaseModel):
+    """A single turn in a chat conversation.
+
+    Attributes:
+        role: Either 'user' or 'assistant'.
+        content: Plain text content of the message.
+    """
+
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class QueryContext(BaseModel):
+    """Compressed pipeline result passed with every chat query.
+
+    Contains everything the LLM needs to answer questions about the analysis,
+    but excludes per-cell coordinates and plot images to keep the payload small.
+
+    Attributes:
+        n_cells_input: Cells before QC.
+        n_cells_after_qc: Cells after QC.
+        n_hvgs: Highly variable genes selected.
+        n_clusters: Leiden clusters.
+        model_display_name: CellTypist model used.
+        tissue: Tissue type provided by the user.
+        organism: Organism provided by the user.
+        cluster_summaries: Cluster-level CellTypist labels.
+        cluster_validations: LLM expert review per cluster (if run).
+        marker_genes: Top marker genes per cluster.
+        dataset_metadata: Organism/tissue found in the h5ad file.
+    """
+
+    n_cells_input: int
+    n_cells_after_qc: int
+    n_hvgs: int
+    n_clusters: int
+    model_display_name: str
+    tissue: str
+    organism: str
+    cluster_summaries: list[ClusterSummary]
+    cluster_validations: list[ClusterValidation]
+    marker_genes: list[MarkerGene]
+    dataset_metadata: DatasetMetadata | None = None
+
+
+class QueryRequest(BaseModel):
+    """Request body for POST /query.
+
+    Attributes:
+        question: The user's natural-language question.
+        conversation_history: Prior turns (excludes the current question).
+        context: Compressed pipeline result used as LLM context.
+    """
+
+    question: str
+    conversation_history: list[ConversationMessage] = Field(default_factory=list)
+    context: QueryContext
+
+
+class QueryResponse(BaseModel):
+    """Response from POST /query.
+
+    Attributes:
+        answer: The LLM's plain-text answer.
+    """
+
+    answer: str
+
+
 class PipelineResult(BaseModel):
     n_cells_input: int
     n_cells_after_qc: int

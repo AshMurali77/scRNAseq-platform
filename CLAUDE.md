@@ -6,13 +6,15 @@ datasets (.h5ad files), runs a scanpy preprocessing pipeline, and
 returns annotated cell type results. Built as a learning project
 with iterative phases.
 
-## Current state (Phase 4 complete)
-- FastAPI backend: two endpoints — `POST /select-model` and `POST /analyze`
+## Current state (Phase 5 complete)
+- FastAPI backend: three endpoints — `POST /select-model`, `POST /analyze`, `POST /query`
   - `/select-model` runs LLM or rule-based model selection before any file upload
   - `/analyze` accepts a .h5ad upload, runs the full scanpy pipeline, returns JSON
+  - `/query` accepts a natural-language question + conversation history + compressed
+    context; returns an LLM-generated answer about the pipeline results
 - React + Tailwind frontend:
   - LLM / Rule-based toggle in the upload form gates ALL LLM calls (model
-    selection + expert validation); rule-based mode makes zero API calls
+    selection + expert validation + chat); rule-based mode makes zero API calls
   - "Dataset is pre-filtered" checkbox skips QC cell filtering; normalization
     is auto-detected separately
   - Clarification card (amber) surfaces LLM questions to the user; capped at
@@ -28,6 +30,9 @@ with iterative phases.
     clicking a per-cell table row highlights that cell on both UMAPs simultaneously
   - Per-cell table: compact rows, Cluster / Annotation / Cell Type columns,
     cluster + cell type filter dropdowns, paginated (50 per page)
+  - Chat panel (LLM mode only): conversational interface below results; supports
+    multi-turn questions about clusters, marker genes, and annotations; assistant
+    responses rendered as GFM markdown (bold, lists, tables, code blocks)
 - CellTypist annotation running end-to-end with majority_voting=True
 - In-memory model cache (_model_cache dict) — models loaded once per process
   lifetime, reused across requests
@@ -37,18 +42,24 @@ with iterative phases.
 - Backend: Python, FastAPI, `anthropic` SDK, `python-dotenv`
 - Pipeline: scanpy, anndata, celltypist
 - Frontend: React, TypeScript, Tailwind CSS, Vite
-- Serving: Vite dev server (:5173) proxies `/analyze` and `/select-model` to FastAPI (:8000)
+- Frontend deps: `react-markdown`, `remark-gfm` (markdown rendering in chat)
+- Serving: Vite dev server (:5173) proxies `/analyze`, `/select-model`, `/query`
+  to FastAPI (:8000)
 - Storage: local filesystem for now, S3 later
 
 ## Key files
 - `app/main.py` — FastAPI app; `logger = logging.getLogger(__name__)` defined here
 - `app/models/schemas.py` — Pydantic models: `ModelSelectionRequest`,
   `ModelSelection`, `PipelineParams`, `PipelineResult`, `CellMetadata`,
-  `ClusterSummary`, `MarkerGene`, `QCParams`, `ClusterValidation`, `DatasetMetadata`
+  `ClusterSummary`, `MarkerGene`, `QCParams`, `ClusterValidation`, `DatasetMetadata`,
+  `ConversationMessage`, `QueryContext`, `QueryRequest`, `QueryResponse`
 - `app/pipeline/annotate.py` — `select_model()`, `_llm_select_model()`,
   `_rule_based_select_model()`, `run_celltypist()`, `run_marker_genes()`
 - `app/pipeline/validate.py` — `validate_cluster_labels()`: batches all clusters
   into one `claude-opus-4-6` call with adaptive thinking; non-fatal
+- `app/pipeline/query.py` — `answer_query(question, history, context)`: builds
+  structured context text from `QueryContext`, calls `claude-opus-4-6` (no
+  thinking), supports multi-turn via `conversation_history`
 - `app/pipeline/metadata.py` — `extract_and_check_metadata()`: reads h5ad uns/obs
   for organism/tissue, normalises scientific names, flags organism mismatches
 - `app/pipeline/plot.py` — `generate_plots()` returns base64 UMAPs; non-fatal
@@ -58,15 +69,18 @@ with iterative phases.
 - `app/pipeline/reduce.py`, `cluster.py` — PCA/neighbors/UMAP, Leiden clustering
 - `app/utils/errors.py` — `PipelineStepError(step, message)`
 - `app/utils/io.py` — `load_h5ad()`, `stage_upload()`
-- `frontend/src/App.tsx` — state machine (see below); `useLlm` and `skipQc`
-  threaded through all states into `analyze()`
+- `frontend/src/App.tsx` — state machine (see below); `done` state carries
+  `tissue`, `organism`, `useLlm` for the chat panel
 - `frontend/src/components/UploadForm.tsx` — file drop, organism/tissue,
   LLM/rule-based toggle, pre-filtered checkbox
 - `frontend/src/components/ResultsTable.tsx` — metadata banner, model banner,
   cluster table with validation badges, interactive Canvas UMAPs, per-cell table
 - `frontend/src/components/UmapPlot.tsx` — Canvas-based UMAP; ResizeObserver
   for responsive sizing; highlighted cell drawn last with amber+white halo
-- `frontend/src/services/api.ts` — `selectModel()`, `analyze(skip_qc, use_llm)`
+- `frontend/src/components/ChatPanel.tsx` — multi-turn chat UI; builds
+  `QueryContext` via `useMemo` from result prop; assistant messages rendered
+  with `ReactMarkdown` + `remark-gfm` (tables, bold, lists, code, headings)
+- `frontend/src/services/api.ts` — `selectModel()`, `analyze()`, `queryPipeline()`
 - `frontend/src/types/pipeline.ts` — TypeScript interfaces mirroring backend schemas
 - `frontend/vite.config.ts` — proxy config (must include all backend routes)
 - `.env` / `.env.example` — `ANTHROPIC_API_KEY=`
@@ -76,10 +90,12 @@ with iterative phases.
 When `use_llm=False` (rule-based mode), **zero** LLM calls are made anywhere:
 - `/select-model` uses the deterministic lookup table
 - `/analyze` skips `validate_cluster_labels()` entirely
+- Chat panel is not rendered (hidden entirely in rule-based mode)
 
 When `use_llm=True`:
 - `/select-model` calls `claude-haiku-4-5` for model selection
 - `/analyze` calls `claude-opus-4-6` with adaptive thinking for expert validation
+- `/query` calls `claude-opus-4-6` (no thinking) for each chat turn
 
 ## Model selection architecture
 Two modes toggled per-request via `use_llm: bool`:
@@ -114,6 +130,28 @@ Two modes toggled per-request via `use_llm: bool`:
 - Each item: `cluster_id`, `status` (confirmed/uncertain/conflicting), `explanation`
 - Post-merge: missing cluster IDs default to `uncertain` with a placeholder message
 - Non-fatal: any exception returns empty list; pipeline result still returned
+
+## Interactive querying (Phase 5)
+- `app/pipeline/query.py` — `answer_query(question, history, context)`
+- `_build_context_text(ctx)`: serializes `QueryContext` into a structured markdown
+  block covering dataset stats, file metadata, and per-cluster annotations
+  (CellTypist label + expert review status + explanation + top 10 marker genes)
+- Uses `claude-opus-4-6` without adaptive thinking (queries are direct; no
+  complex reasoning needed; avoids multi-turn thinking-block state management)
+- `QueryContext` is a compressed subset of `PipelineResult` — excludes `cells`
+  (per-cell coordinates) and `plots` (base64 images) to keep payload small
+- Stateless: full context + conversation history travel with every request;
+  no server-side session state
+- `POST /query` endpoint in `app/main.py`; raises 400 on API failure
+- Frontend `ChatPanel.tsx`:
+  - `QueryContext` built once via `useMemo` from the result prop
+  - Message list auto-scrolls to bottom on new message
+  - User messages: plain text, right-aligned, blue background
+  - Assistant messages: rendered via `ReactMarkdown` + `remark-gfm`
+    (supports bold, italic, lists, inline code, code blocks, headings, GFM tables)
+  - Loading state shown as animated "Thinking…" bubble
+  - Enter key sends; Shift+Enter does nothing (single-line input)
+  - Only rendered when `useLlm=true` (hidden entirely in rule-based mode)
 
 ## Dataset metadata validation (Phase 4)
 - `app/pipeline/metadata.py` — `extract_and_check_metadata(adata, tissue, organism)`
@@ -170,9 +208,11 @@ idle
       round increments each submit; clarification_round sent to backend
   → loading           (on confident selection; calls POST /analyze)
   → done | error
+      done stores: result, modelSelection, tissue, organism, useLlm
 ```
 `useLlm` and `skipQc` are carried through every state transition and passed
-into `analyze()` at the end.
+into `analyze()` at the end. `tissue` and `organism` are stored in `done`
+so `ChatPanel` can include them in the `QueryContext`.
 
 ## Key constraints
 - Input files are small .h5ad files only (< 500MB for now)
@@ -188,11 +228,6 @@ into `analyze()` at the end.
 - No notebooks — all code in .py files
 
 ## Phase roadmap
-
-### Phase 5 — interactive querying
-- Let the user ask natural language questions about specific clusters in the UI:
-  "Why is cluster 4 labeled monocytes?", "What other cell types express these markers?"
-- Conversational interface backed by an LLM with access to the current adata state
 
 ### Phase 6 — downstream analysis selection
 - Based on the annotated dataset, offer selectable downstream analyses:

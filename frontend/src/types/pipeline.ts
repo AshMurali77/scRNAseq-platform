@@ -70,6 +70,35 @@ export interface DatasetMetadata {
   organism_mismatch: boolean
 }
 
+export interface ConversationMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface QueryContext {
+  n_cells_input: number
+  n_cells_after_qc: number
+  n_hvgs: number
+  n_clusters: number
+  model_display_name: string
+  tissue: string
+  organism: string
+  cluster_summaries: ClusterSummary[]
+  cluster_validations: ClusterValidation[]
+  marker_genes: MarkerGene[]
+  dataset_metadata: DatasetMetadata | null
+}
+
+export interface QueryRequest {
+  question: string
+  conversation_history: ConversationMessage[]
+  context: QueryContext
+}
+
+export interface QueryResponse {
+  answer: string
+}
+
 export interface PipelineResult {
   n_cells_input: number
   n_cells_after_qc: number
