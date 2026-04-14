@@ -13,13 +13,15 @@ def run_qc(
     max_genes: int = 5000,
     max_pct_mt: float = 20.0,
     min_cells: int = 3,
+    skip: bool = False,
 ) -> ad.AnnData:
     """Filter cells by gene count and mitochondrial content, and genes by cell count.
 
-    Annotates mitochondrial genes via the 'mt' flag, computes per-cell QC
-    metrics, filters cells on n_genes_by_counts and pct_counts_mt, then
-    removes genes expressed in fewer than min_cells cells. Gene filtering
-    is required to prevent NaN bin edges during HVG selection downstream.
+    Annotates mitochondrial genes via the 'mt' flag and computes per-cell QC
+    metrics. When skip=False (default), cells outside the n_genes / pct_mt
+    thresholds are removed. When skip=True, cell filtering is skipped (for
+    datasets that are already QC-filtered); gene filtering is still applied
+    because it is required to prevent NaN bin edges during HVG selection.
 
     Args:
         adata: Input AnnData object.
@@ -27,6 +29,7 @@ def run_qc(
         max_genes: Maximum number of genes expressed per cell.
         max_pct_mt: Maximum percentage of mitochondrial counts per cell.
         min_cells: Minimum number of cells a gene must be expressed in.
+        skip: If True, skip cell-level filtering (pre-filtered datasets).
 
     Returns:
         Filtered AnnData object.
@@ -41,14 +44,24 @@ def run_qc(
         sc.pp.calculate_qc_metrics(
             adata, qc_vars=["mt"], percent_top=None, log1p=False, inplace=True
         )
-        adata = adata[
-            (adata.obs["n_genes_by_counts"] >= min_genes)
-            & (adata.obs["n_genes_by_counts"] <= max_genes)
-            & (adata.obs["pct_counts_mt"] <= max_pct_mt)
-        ].copy()
-        logger.info("QC after cell filter: %d cells remaining", adata.n_obs)
+
+        if skip:
+            logger.info("QC cell filtering skipped (pre-filtered dataset).")
+        else:
+            adata = adata[
+                (adata.obs["n_genes_by_counts"] >= min_genes)
+                & (adata.obs["n_genes_by_counts"] <= max_genes)
+                & (adata.obs["pct_counts_mt"] <= max_pct_mt)
+            ].copy()
+            logger.info("QC after cell filter: %d cells remaining", adata.n_obs)
+
+        # Gene filtering is always applied — needed to prevent NaN bin edges
+        # in sc.pp.highly_variable_genes() during the normalize step.
         sc.pp.filter_genes(adata, min_cells=min_cells)
-        logger.info("QC after gene filter (min_cells=%d): %d genes remaining", min_cells, adata.n_vars)
+        logger.info(
+            "QC after gene filter (min_cells=%d): %d genes remaining",
+            min_cells, adata.n_vars,
+        )
     except PipelineStepError:
         raise
     except Exception as e:
@@ -59,7 +72,7 @@ def run_qc(
             "qc",
             f"All cells were filtered out (min_genes={min_genes}, "
             f"max_genes={max_genes}, max_pct_mt={max_pct_mt}). "
-            "Loosen QC thresholds.",
+            "Loosen QC thresholds or enable pre-filtered mode.",
         )
 
     return adata

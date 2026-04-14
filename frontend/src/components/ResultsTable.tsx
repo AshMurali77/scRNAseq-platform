@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import type { CellMetadata, ModelSelection, PipelineResult } from '../types/pipeline'
+import type { CellMetadata, ClusterValidation, ModelSelection, PipelineResult } from '../types/pipeline'
 import UmapPlot from './UmapPlot'
 
 const PAGE_SIZE = 50
@@ -9,11 +9,25 @@ interface Props {
   modelSelection: ModelSelection
 }
 
+// ------------------------------------------------------------------ helpers
+
+const STATUS_CONFIG: Record<
+  ClusterValidation['status'],
+  { label: string; badge: string; row: string; dot: string }
+> = {
+  confirmed:   { label: 'Confirmed',   badge: 'bg-green-100 text-green-800',   row: '',                 dot: 'bg-green-500' },
+  uncertain:   { label: 'Uncertain',   badge: 'bg-amber-100 text-amber-800',   row: 'bg-amber-50/40',   dot: 'bg-amber-400' },
+  conflicting: { label: 'Conflicting', badge: 'bg-red-100 text-red-800',       row: 'bg-red-50/40',     dot: 'bg-red-500'   },
+}
+
+// ------------------------------------------------------------------ main
+
 export default function ResultsTable({ result, modelSelection }: Props) {
   const [page, setPage] = useState(0)
   const [filterCluster, setFilterCluster] = useState('')
   const [filterCellType, setFilterCellType] = useState('')
   const [selectedCellId, setSelectedCellId] = useState<string | null>(null)
+  const [expandedCluster, setExpandedCluster] = useState<string | null>(null)
 
   const confidencePct = Math.round(modelSelection.confidence * 100)
   const confidenceColor =
@@ -30,6 +44,13 @@ export default function ResultsTable({ result, modelSelection }: Props) {
     return map
   }, [result.cluster_summaries])
 
+  // Cluster id → validation object
+  const validationMap = useMemo(() => {
+    const map: Record<string, ClusterValidation> = {}
+    for (const v of result.cluster_validations) map[v.cluster_id] = v
+    return map
+  }, [result.cluster_validations])
+
   // Unique values for filter dropdowns
   const clusterOptions = useMemo(
     () => [...new Set(result.cells.map((c) => c.leiden_cluster))].sort((a, b) => +a - +b),
@@ -40,7 +61,6 @@ export default function ResultsTable({ result, modelSelection }: Props) {
     [result.cells],
   )
 
-  // Filtered cell list (resets page via key on filter change)
   const filtered = useMemo(() => {
     return result.cells.filter((c) => {
       if (filterCluster && c.leiden_cluster !== filterCluster) return false
@@ -59,8 +79,46 @@ export default function ResultsTable({ result, modelSelection }: Props) {
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE)
   const visible: CellMetadata[] = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
 
+  const hasValidation = result.cluster_validations.length > 0
+  const dm = result.dataset_metadata
+
   return (
     <div className="flex flex-col gap-6">
+
+      {/* Dataset metadata */}
+      {dm && (
+        <div className={`rounded-lg border px-4 py-3 text-xs flex flex-col gap-1 ${
+          dm.organism_mismatch
+            ? 'border-red-200 bg-red-50'
+            : 'border-gray-200 bg-gray-50'
+        }`}>
+          <p className={`font-medium ${dm.organism_mismatch ? 'text-red-700' : 'text-gray-600'}`}>
+            {dm.organism_mismatch ? 'Dataset metadata mismatch detected' : 'Dataset metadata'}
+          </p>
+          <div className="flex flex-wrap gap-x-6 gap-y-0.5">
+            <span className="text-gray-600">
+              Organism in file:{' '}
+              {dm.organism_in_file
+                ? <span className={`font-medium ${dm.organism_mismatch ? 'text-red-700' : 'text-gray-800'}`}>{dm.organism_in_file}</span>
+                : <span className="italic text-gray-400">not found</span>
+              }
+            </span>
+            <span className="text-gray-600">
+              Tissue in file:{' '}
+              {dm.tissue_in_file
+                ? <span className="font-medium text-gray-800">{dm.tissue_in_file}</span>
+                : <span className="italic text-gray-400">not found</span>
+              }
+            </span>
+          </div>
+          {dm.organism_mismatch && (
+            <p className="text-red-600 italic">
+              This differs from your selection. Results may be unreliable.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Summary stats */}
       <div className="grid grid-cols-4 gap-3">
         <Stat label="Cells (input)" value={result.n_cells_input} />
@@ -83,24 +141,71 @@ export default function ResultsTable({ result, modelSelection }: Props) {
         <p className="text-xs text-blue-500 italic">{modelSelection.reasoning}</p>
       </div>
 
-      {/* Cluster summary */}
+      {/* Cluster annotations + validation */}
       <div>
-        <h3 className="mb-2 text-xs font-medium text-gray-700">Cluster annotations</h3>
+        <h3 className="mb-2 text-xs font-medium text-gray-700">
+          Cluster annotations
+          {hasValidation && (
+            <span className="ml-2 font-normal text-gray-400">— click a row to see expert review</span>
+          )}
+        </h3>
         <div className="overflow-x-auto rounded-lg border border-gray-200">
           <table className="min-w-full divide-y divide-gray-200 text-sm">
             <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
               <tr>
                 <Th>Cluster</Th>
                 <Th>Cell type (majority vote)</Th>
+                {hasValidation && <Th>Expert review</Th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 bg-white">
-              {result.cluster_summaries.map((cs) => (
-                <tr key={cs.cluster_id} className="hover:bg-gray-50">
-                  <td className="px-4 py-2 font-medium">{cs.cluster_id}</td>
-                  <td className="px-4 py-2">{cs.celltypist_label}</td>
-                </tr>
-              ))}
+              {result.cluster_summaries.map((cs) => {
+                const v = validationMap[cs.cluster_id]
+                const cfg = v ? STATUS_CONFIG[v.status] : null
+                const isExpanded = expandedCluster === cs.cluster_id
+
+                return (
+                  <>
+                    <tr
+                      key={cs.cluster_id}
+                      onClick={() => v && setExpandedCluster(isExpanded ? null : cs.cluster_id)}
+                      className={`transition-colors ${cfg?.row ?? ''} ${v ? 'cursor-pointer hover:brightness-95' : ''}`}
+                    >
+                      <td className="px-4 py-2 font-medium">{cs.cluster_id}</td>
+                      <td className="px-4 py-2">{cs.celltypist_label}</td>
+                      {hasValidation && (
+                        <td className="px-4 py-2">
+                          {cfg ? (
+                            <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${cfg.badge}`}>
+                              <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />
+                              {cfg.label}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-gray-400">—</span>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                    {v && isExpanded && (
+                      <tr key={`${cs.cluster_id}-detail`} className={cfg?.row ?? ''}>
+                        <td colSpan={hasValidation ? 3 : 2} className="px-4 pb-3 pt-0">
+                          <div className="rounded-md border border-gray-100 bg-white px-3 py-2 text-xs text-gray-700 space-y-1">
+                            <p>{v.explanation}</p>
+                            {v.top_marker_genes.length > 0 && (
+                              <p className="text-gray-400">
+                                Markers used:{' '}
+                                <span className="font-mono text-gray-600">
+                                  {v.top_marker_genes.join(', ')}
+                                </span>
+                              </p>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </>
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -176,9 +281,7 @@ export default function ResultsTable({ result, modelSelection }: Props) {
                     key={cell.cell_id}
                     onClick={() => setSelectedCellId(isSelected ? null : cell.cell_id)}
                     className={`cursor-pointer transition-colors ${
-                      isSelected
-                        ? 'bg-amber-50 hover:bg-amber-100'
-                        : 'hover:bg-gray-50'
+                      isSelected ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-gray-50'
                     }`}
                   >
                     <td className="px-3 py-1 font-mono text-gray-500 truncate max-w-[160px]" title={cell.cell_id}>
@@ -207,7 +310,8 @@ export default function ResultsTable({ result, modelSelection }: Props) {
           <div className="mt-3 flex items-center justify-between text-xs text-gray-600">
             <span>
               Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filtered.length)} of{' '}
-              {filtered.length}{filtered.length !== result.cells.length ? ` (filtered from ${result.cells.length})` : ''} cells
+              {filtered.length}
+              {filtered.length !== result.cells.length ? ` (filtered from ${result.cells.length})` : ''} cells
             </span>
             <div className="flex gap-2">
               <PageButton onClick={() => setPage((p) => p - 1)} disabled={page === 0}>
@@ -223,6 +327,8 @@ export default function ResultsTable({ result, modelSelection }: Props) {
     </div>
   )
 }
+
+// ------------------------------------------------------------------ sub-components
 
 function Stat({ label, value }: { label: string; value: number }) {
   return (

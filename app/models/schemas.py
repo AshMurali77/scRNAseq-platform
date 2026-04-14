@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -18,6 +20,8 @@ class PipelineParams(BaseModel):
     n_neighbors: int = Field(15, description="Neighbors for kNN graph.")
     leiden_resolution: float = Field(0.5, description="Leiden clustering resolution.")
     n_marker_genes: int = Field(25, description="Top marker genes per cluster.")
+    skip_qc: bool = Field(False, description="Skip cell-level QC filtering for pre-filtered datasets. Gene filtering is still applied.")
+    use_llm: bool = Field(True, description="If True, run LLM-based expert validation of cluster labels. Set to False to skip LLM calls and reduce token cost.")
 
 
 class ModelSelectionRequest(BaseModel):
@@ -72,6 +76,39 @@ class ClusterSummary(BaseModel):
     celltypist_label: str
 
 
+class ClusterValidation(BaseModel):
+    """LLM expert review of a single cluster's CellTypist annotation.
+
+    Attributes:
+        cluster_id: Leiden cluster identifier.
+        celltypist_label: Majority-voted CellTypist label for this cluster.
+        status: 'confirmed', 'uncertain', or 'conflicting'.
+        explanation: 1–2 sentence biological rationale from the LLM.
+        top_marker_genes: Gene names used as evidence (in score order).
+    """
+
+    cluster_id: str
+    celltypist_label: str
+    status: Literal["confirmed", "uncertain", "conflicting"]
+    explanation: str
+    top_marker_genes: list[str]
+
+
+class DatasetMetadata(BaseModel):
+    """Metadata extracted from the uploaded h5ad file.
+
+    Attributes:
+        organism_in_file: Raw organism string found in the file, or None.
+        tissue_in_file: Raw tissue string found in the file, or None.
+        organism_mismatch: True when the file organism does not match the
+            user-provided organism after normalisation.
+    """
+
+    organism_in_file: str | None = None
+    tissue_in_file: str | None = None
+    organism_mismatch: bool = False
+
+
 class PipelineResult(BaseModel):
     n_cells_input: int
     n_cells_after_qc: int
@@ -85,4 +122,12 @@ class PipelineResult(BaseModel):
     plots: dict[str, str] = Field(
         default_factory=dict,
         description="Base64-encoded PNG plots keyed by name (e.g. 'umap_clusters').",
+    )
+    cluster_validations: list[ClusterValidation] = Field(
+        default_factory=list,
+        description="LLM expert review of each cluster's CellTypist label.",
+    )
+    dataset_metadata: DatasetMetadata | None = Field(
+        None,
+        description="Organism/tissue metadata extracted from the h5ad file.",
     )

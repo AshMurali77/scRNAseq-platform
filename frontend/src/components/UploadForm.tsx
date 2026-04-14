@@ -8,7 +8,7 @@ const TISSUE_OPTIONS: Record<string, string[]> = {
 }
 
 interface Props {
-  onSubmit: (file: File, tissue: string, organism: string, useLlm: boolean) => void
+  onSubmit: (file: File, tissue: string, organism: string, useLlm: boolean, skipQc: boolean) => void
   disabled: boolean
 }
 
@@ -18,6 +18,7 @@ export default function UploadForm({ onSubmit, disabled }: Props) {
   const [organism, setOrganism] = useState<string>('')
   const [tissue, setTissue] = useState<string>('')
   const [useLlm, setUseLlm] = useState(true)
+  const [skipQc, setSkipQc] = useState(false)
 
   function handleOrganismChange(e: React.ChangeEvent<HTMLSelectElement>) {
     setOrganism(e.target.value)
@@ -31,7 +32,7 @@ export default function UploadForm({ onSubmit, disabled }: Props) {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (selectedFile && tissue && organism) onSubmit(selectedFile, tissue, organism, useLlm)
+    if (selectedFile && tissue && organism) onSubmit(selectedFile, tissue, organism, useLlm, skipQc)
   }
 
   const canSubmit = !!selectedFile && !!tissue && !!organism && !disabled
@@ -89,6 +90,20 @@ export default function UploadForm({ onSubmit, disabled }: Props) {
           {useLlm ? 'AI-powered — accepts any tissue description' : 'Fast deterministic lookup'}
         </span>
       </div>
+
+      {/* Pre-filtered toggle */}
+      <label className="flex items-center gap-3 rounded-lg border border-gray-200 px-4 py-3 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={skipQc}
+          onChange={(e) => setSkipQc(e.target.checked)}
+          className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-400"
+        />
+        <div>
+          <span className="text-xs font-medium text-gray-700">Dataset is pre-filtered</span>
+          <span className="ml-2 text-xs text-gray-400">Skip QC cell filtering — normalization is auto-detected</span>
+        </div>
+      </label>
 
       {/* Organism + tissue */}
       <div className="grid grid-cols-2 gap-4">

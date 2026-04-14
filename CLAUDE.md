@@ -6,21 +6,28 @@ datasets (.h5ad files), runs a scanpy preprocessing pipeline, and
 returns annotated cell type results. Built as a learning project
 with iterative phases.
 
-## Current state (Phase 3 complete)
+## Current state (Phase 4 complete)
 - FastAPI backend: two endpoints — `POST /select-model` and `POST /analyze`
   - `/select-model` runs LLM or rule-based model selection before any file upload
   - `/analyze` accepts a .h5ad upload, runs the full scanpy pipeline, returns JSON
 - React + Tailwind frontend:
-  - LLM / Rule-based toggle in the upload form
-  - LLM mode: free-text tissue input; Rule-based mode: constrained dropdown
+  - LLM / Rule-based toggle in the upload form gates ALL LLM calls (model
+    selection + expert validation); rule-based mode makes zero API calls
+  - "Dataset is pre-filtered" checkbox skips QC cell filtering; normalization
+    is auto-detected separately
   - Clarification card (amber) surfaces LLM questions to the user; capped at
     `_MAX_CLARIFICATION_ROUNDS = 2` — after that the LLM proceeds with its best
     guess regardless of confidence
-  - Model info banner shows display_name, description, reasoning, confidence %
+  - Model info banner: display_name, description, reasoning, confidence %
     (green ≥85%, amber ≥70%, red <70%)
-  - Summary stats strip, cluster annotation table, paginated per-cell results
-    (Cell ID, Cluster, Cell Type, UMAP X/Y)
-  - UMAP plots rendered inline: 2-column grid of base64 PNG images
+  - Dataset metadata banner: shows organism/tissue found in h5ad file (or
+    "not found" if absent); turns red if organism doesn't match user selection
+  - Cluster annotations table with expert review badges (Confirmed / Uncertain /
+    Conflicting); click a row to expand the LLM explanation + marker genes used
+  - Interactive UMAP plots rendered client-side via Canvas from cell coordinates;
+    clicking a per-cell table row highlights that cell on both UMAPs simultaneously
+  - Per-cell table: compact rows, Cluster / Annotation / Cell Type columns,
+    cluster + cell type filter dropdowns, paginated (50 per page)
 - CellTypist annotation running end-to-end with majority_voting=True
 - In-memory model cache (_model_cache dict) — models loaded once per process
   lifetime, reused across requests
@@ -34,26 +41,45 @@ with iterative phases.
 - Storage: local filesystem for now, S3 later
 
 ## Key files
-- `app/main.py` — FastAPI app, `/select-model` and `/analyze` endpoints
+- `app/main.py` — FastAPI app; `logger = logging.getLogger(__name__)` defined here
 - `app/models/schemas.py` — Pydantic models: `ModelSelectionRequest`,
   `ModelSelection`, `PipelineParams`, `PipelineResult`, `CellMetadata`,
-  `ClusterSummary`, `MarkerGene`, `QCParams`
+  `ClusterSummary`, `MarkerGene`, `QCParams`, `ClusterValidation`, `DatasetMetadata`
 - `app/pipeline/annotate.py` — `select_model()`, `_llm_select_model()`,
   `_rule_based_select_model()`, `run_celltypist()`, `run_marker_genes()`
+- `app/pipeline/validate.py` — `validate_cluster_labels()`: batches all clusters
+  into one `claude-opus-4-6` call with adaptive thinking; non-fatal
+- `app/pipeline/metadata.py` — `extract_and_check_metadata()`: reads h5ad uns/obs
+  for organism/tissue, normalises scientific names, flags organism mismatches
 - `app/pipeline/plot.py` — `generate_plots()` returns base64 UMAPs; non-fatal
-- `app/pipeline/qc.py`, `normalize.py`, `reduce.py`, `cluster.py` — pipeline steps
+- `app/pipeline/qc.py` — `run_qc(skip=False)`: skip=True bypasses cell filtering
+- `app/pipeline/normalize.py` — auto-detects log-normalization via
+  `adata.uns['log1p']` + max-value heuristic; skips normalize/log1p if detected
+- `app/pipeline/reduce.py`, `cluster.py` — PCA/neighbors/UMAP, Leiden clustering
 - `app/utils/errors.py` — `PipelineStepError(step, message)`
 - `app/utils/io.py` — `load_h5ad()`, `stage_upload()`
-- `frontend/src/App.tsx` — state machine: idle → selecting_model →
-  clarification_needed → loading → done / error
+- `frontend/src/App.tsx` — state machine (see below); `useLlm` and `skipQc`
+  threaded through all states into `analyze()`
 - `frontend/src/components/UploadForm.tsx` — file drop, organism/tissue,
-  LLM/rule-based toggle
-- `frontend/src/components/ResultsTable.tsx` — model banner, UMAPs, cluster
-  table, per-cell table with pagination
-- `frontend/src/services/api.ts` — `selectModel()`, `analyze()`
+  LLM/rule-based toggle, pre-filtered checkbox
+- `frontend/src/components/ResultsTable.tsx` — metadata banner, model banner,
+  cluster table with validation badges, interactive Canvas UMAPs, per-cell table
+- `frontend/src/components/UmapPlot.tsx` — Canvas-based UMAP; ResizeObserver
+  for responsive sizing; highlighted cell drawn last with amber+white halo
+- `frontend/src/services/api.ts` — `selectModel()`, `analyze(skip_qc, use_llm)`
 - `frontend/src/types/pipeline.ts` — TypeScript interfaces mirroring backend schemas
 - `frontend/vite.config.ts` — proxy config (must include all backend routes)
 - `.env` / `.env.example` — `ANTHROPIC_API_KEY=`
+
+## LLM cost gating
+`use_llm: bool` flows from the UI toggle → `PipelineParams` → `/analyze`.
+When `use_llm=False` (rule-based mode), **zero** LLM calls are made anywhere:
+- `/select-model` uses the deterministic lookup table
+- `/analyze` skips `validate_cluster_labels()` entirely
+
+When `use_llm=True`:
+- `/select-model` calls `claude-haiku-4-5` for model selection
+- `/analyze` calls `claude-opus-4-6` with adaptive thinking for expert validation
 
 ## Model selection architecture
 Two modes toggled per-request via `use_llm: bool`:
@@ -80,37 +106,73 @@ Two modes toggled per-request via `use_llm: bool`:
 - Returns `confidence=1.0`, no clarifying question
 - Raises `PipelineStepError` with full supported list on miss
 
+## Expert validation (Phase 4)
+- `app/pipeline/validate.py` — `validate_cluster_labels(adata, tissue, organism)`
+- Extracts top 10 Wilcoxon marker genes per cluster (gene, score, logFC)
+- All clusters sent in a single `claude-opus-4-6` prompt with adaptive thinking
+- Structured output: `_ValidationResponse` containing list of `_ClusterValidationItem`
+- Each item: `cluster_id`, `status` (confirmed/uncertain/conflicting), `explanation`
+- Post-merge: missing cluster IDs default to `uncertain` with a placeholder message
+- Non-fatal: any exception returns empty list; pipeline result still returned
+
+## Dataset metadata validation (Phase 4)
+- `app/pipeline/metadata.py` — `extract_and_check_metadata(adata, tissue, organism)`
+- Called immediately after `load_h5ad`, before QC, on the unmodified object
+- Checks `adata.uns` then modal `adata.obs` column for priority-ordered key lists:
+  - Organism: `organism`, `species`, `organism_ontology_term_id`, etc.
+  - Tissue: `tissue`, `tissue_type`, `organ`, `tissue_ontology_term_id`, etc.
+- Normalises scientific names via `_ORGANISM_SYNONYMS` map
+  (e.g. `Homo sapiens`, `NCBITaxon:9606` → `human`)
+- Sets `organism_mismatch=True` when normalised file organism ≠ provided organism
+- Tissue is reported but not flagged — too many synonyms for reliable comparison
+- UI shows both fields always; "not found" in muted italic if absent
+
+## Pre-filtered dataset support
+- `PipelineParams.skip_qc: bool = False` — passed via form checkbox
+- `run_qc(skip=True)`: skips cell filtering; gene filtering (`min_cells`) still runs
+  (required to prevent NaN bin edges in HVG selection)
+- `run_normalize()` auto-detects log-normalization:
+  1. Checks `adata.uns.get('log1p')` (set by `sc.pp.log1p()`) — most reliable
+  2. Heuristic: max value < 30 → treat as log-normalized
+  - If detected: skips `normalize_total` + `log1p`; preserves existing `adata.raw`
+  - If not detected: runs full normalization pipeline as before
+
+## Interactive UMAP (Canvas-based)
+- `frontend/src/components/UmapPlot.tsx` — replaces static backend PNG images
+- Renders all cells as 2px circles from `result.cells` umap_x/umap_y coordinates
+- `ResizeObserver` redraws on container resize; `devicePixelRatio` for retina
+- Highlighted cell: 8px white halo + 6px amber fill, drawn last (always on top)
+- Color map: Tableau-20 palette, HSL fallback for >20 categories
+- Per-cluster and per-cell-type views rendered simultaneously; both update on row click
+- Backend still generates PNG plots but they are no longer rendered in the UI
+
 ## Pipeline steps (in order)
-1. QC — filter cells by n_genes_by_counts, total_counts, pct_counts_mt;
-   filter genes by min_cells to prevent NaN bin edges downstream
-2. Normalize — sc.pp.normalize_total(), sc.pp.log1p()
+1. QC — filter cells by n_genes_by_counts, pct_counts_mt (skippable);
+   filter genes by min_cells always runs
+2. Normalize — auto-detects if already log-normalized; stores full matrix in
+   adata.raw before HVG subsetting
 3. HVGs — sc.pp.highly_variable_genes(n_top_genes=2000)
 4. PCA — sc.pp.pca()
 5. Neighbors — sc.pp.neighbors()
 6. UMAP — sc.tl.umap()
 7. Leiden clustering — sc.tl.leiden()
-8. Marker genes — sc.tl.rank_genes_groups()
-9. CellTypist — model pre-selected via `/select-model`, passed as `model_name`
-   in `PipelineParams`; majority_voting=True, over_clustering='leiden';
-   annotates using full gene matrix (adata.raw), not HVG subset
-
-## Plots
-- `app/pipeline/plot.py` — `generate_plots(adata)` called after pipeline
-- Uses `matplotlib.use("Agg")` (non-interactive, set at module level)
-- Returns `{"umap_clusters": <b64>, "umap_celltypes": <b64>}` or empty dict
-- Each plot is generated independently; exceptions are caught and logged,
-  so a plot failure never blocks the pipeline result
-- `PipelineResult.plots: dict[str, str]` carries the base64 strings to the frontend
+8. Marker genes — sc.tl.rank_genes_groups() (Wilcoxon)
+9. CellTypist — model pre-selected via `/select-model`, majority_voting=True,
+   over_clustering='leiden'; annotates using adata.raw (full gene matrix)
+10. Expert validation — `validate_cluster_labels()` (LLM mode only, non-fatal)
 
 ## Frontend state machine (App.tsx)
 ```
 idle
   → selecting_model   (on form submit; calls POST /select-model)
   → clarification_needed  (if response.clarifying_question is set)
-      round counter increments each time; clarification_round passed to next request
+      stores: file, tissue, organism, useLlm, skipQc, round
+      round increments each submit; clarification_round sent to backend
   → loading           (on confident selection; calls POST /analyze)
   → done | error
 ```
+`useLlm` and `skipQc` are carried through every state transition and passed
+into `analyze()` at the end.
 
 ## Key constraints
 - Input files are small .h5ad files only (< 500MB for now)
@@ -118,7 +180,6 @@ idle
 - All pipeline code must be modular — each step is a separate function
 - `/select-model` and `/analyze` are separate so model selection fails fast
   before a large file upload begins
-- LLM is called only in `/select-model`, never in `/analyze`
 
 ## Coding preferences
 - Type hints on all functions
@@ -127,13 +188,6 @@ idle
 - No notebooks — all code in .py files
 
 ## Phase roadmap
-
-### Phase 4 — expert validation layer
-- For each cluster, take top 10 marker genes from rank_genes_groups,
-  the CellTypist label, and tissue context
-- Call an LLM to validate whether the label is consistent with known biology
-- Return per-cluster: confirmed / uncertain / conflicting + one paragraph explanation
-- Surface this in the UI alongside the existing results table
 
 ### Phase 5 — interactive querying
 - Let the user ask natural language questions about specific clusters in the UI:

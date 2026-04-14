@@ -16,6 +16,7 @@ type AppState =
       tissue: string
       organism: string
       useLlm: boolean
+      skipQc: boolean
       round: number
     }
   | { status: 'loading' }
@@ -26,9 +27,9 @@ export default function App() {
   const [state, setState] = useState<AppState>({ status: 'idle' })
   const [clarificationText, setClarificationText] = useState('')
 
-  async function handleSubmit(file: File, tissue: string, organism: string, useLlm: boolean) {
+  async function handleSubmit(file: File, tissue: string, organism: string, useLlm: boolean, skipQc: boolean) {
     setState({ status: 'selecting_model' })
-    await runSelectModel(file, tissue, organism, useLlm)
+    await runSelectModel(file, tissue, organism, useLlm, skipQc)
   }
 
   async function runSelectModel(
@@ -36,6 +37,7 @@ export default function App() {
     tissue: string,
     organism: string,
     useLlm: boolean,
+    skipQc: boolean,
     clarification?: string,
     clarificationRound: number = 0,
   ) {
@@ -59,13 +61,14 @@ export default function App() {
           tissue,
           organism,
           useLlm,
+          skipQc,
           round: clarificationRound + 1,
         })
         return
       }
 
       // Confident selection — run the full pipeline immediately
-      await runAnalyze(file, tissue, organism, modelSelection)
+      await runAnalyze(file, tissue, organism, modelSelection, skipQc, useLlm)
     } catch (err) {
       setState({ status: 'error', message: err instanceof Error ? err.message : 'Unknown error' })
     }
@@ -73,8 +76,8 @@ export default function App() {
 
   async function handleClarificationSubmit() {
     if (state.status !== 'clarification_needed') return
-    const { file, tissue, organism, useLlm, round } = state
-    await runSelectModel(file, tissue, organism, useLlm, clarificationText, round)
+    const { file, tissue, organism, useLlm, skipQc, round } = state
+    await runSelectModel(file, tissue, organism, useLlm, skipQc, clarificationText, round)
   }
 
   async function runAnalyze(
@@ -82,10 +85,12 @@ export default function App() {
     tissue: string,
     organism: string,
     modelSelection: ModelSelection,
+    skipQc: boolean = false,
+    useLlm: boolean = true,
   ) {
     setState({ status: 'loading' })
     try {
-      const result = await analyze(file, tissue, organism, modelSelection.model_name)
+      const result = await analyze(file, tissue, organism, modelSelection.model_name, skipQc, useLlm)
       setState({ status: 'done', result, modelSelection })
     } catch (err) {
       setState({ status: 'error', message: err instanceof Error ? err.message : 'Unknown error' })

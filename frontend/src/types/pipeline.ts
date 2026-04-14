@@ -15,6 +15,7 @@ export interface PipelineParams {
   n_neighbors?: number
   leiden_resolution?: number
   n_marker_genes?: number
+  skip_qc?: boolean
 }
 
 export interface ModelSelectionRequest {
@@ -55,6 +56,20 @@ export interface ClusterSummary {
   celltypist_label: string
 }
 
+export interface ClusterValidation {
+  cluster_id: string
+  celltypist_label: string
+  status: 'confirmed' | 'uncertain' | 'conflicting'
+  explanation: string
+  top_marker_genes: string[]
+}
+
+export interface DatasetMetadata {
+  organism_in_file: string | null
+  tissue_in_file: string | null
+  organism_mismatch: boolean
+}
+
 export interface PipelineResult {
   n_cells_input: number
   n_cells_after_qc: number
@@ -66,4 +81,6 @@ export interface PipelineResult {
   cells: CellMetadata[]
   marker_genes: MarkerGene[]
   plots: Record<string, string>
+  cluster_validations: ClusterValidation[]
+  dataset_metadata: DatasetMetadata | null
 }

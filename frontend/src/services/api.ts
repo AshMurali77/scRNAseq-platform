@@ -26,10 +26,12 @@ export async function analyze(
   tissue: string,
   organism: string,
   modelName: string,
+  skipQc: boolean = false,
+  useLlm: boolean = true,
 ): Promise<PipelineResult> {
   const formData = new FormData()
   formData.append('file', file)
-  formData.append('params', JSON.stringify({ tissue, organism, model_name: modelName }))
+  formData.append('params', JSON.stringify({ tissue, organism, model_name: modelName, skip_qc: skipQc, use_llm: useLlm }))
 
   const response = await fetch('/analyze', {
     method: 'POST',

@@ -7,6 +7,8 @@ load_dotenv()
 from app.models.schemas import (
     CellMetadata,
     ClusterSummary,
+    ClusterValidation,
+    DatasetMetadata,
     MarkerGene,
     ModelSelection,
     ModelSelectionRequest,
@@ -14,15 +16,18 @@ from app.models.schemas import (
     PipelineResult,
 )
 from app.pipeline.annotate import run_celltypist, run_marker_genes, select_model
+from app.pipeline.metadata import extract_and_check_metadata
 from app.pipeline.plot import generate_plots
 from app.pipeline.cluster import run_cluster
 from app.pipeline.normalize import run_normalize
 from app.pipeline.qc import run_qc
 from app.pipeline.reduce import run_reduce
+from app.pipeline.validate import validate_cluster_labels
 from app.utils.errors import PipelineStepError
 from app.utils.io import load_h5ad, stage_upload
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="scRNA-seq Annotation Platform")
 
@@ -89,12 +94,18 @@ async def analyze(
         adata = load_h5ad(tmp_path)
         n_cells_input = adata.n_obs
 
+        # Extract h5ad metadata before QC modifies the object
+        dataset_metadata = extract_and_check_metadata(
+            adata, pipeline_params.tissue, pipeline_params.organism
+        )
+
         adata = run_qc(
             adata,
             min_genes=pipeline_params.qc.min_genes,
             max_genes=pipeline_params.qc.max_genes,
             max_pct_mt=pipeline_params.qc.max_pct_mt,
             min_cells=pipeline_params.qc.min_cells,
+            skip=pipeline_params.skip_qc,
         )
         n_cells_after_qc = adata.n_obs
 
@@ -115,6 +126,18 @@ async def analyze(
     finally:
         tmp_path.unlink(missing_ok=True)
 
+    # Expert validation — only when LLM mode is active; non-fatal
+    cluster_validations: list[ClusterValidation] = []
+    if pipeline_params.use_llm:
+        try:
+            cluster_validations = validate_cluster_labels(
+                adata, pipeline_params.tissue, pipeline_params.organism
+            )
+        except Exception as exc:
+            logger.warning("Cluster validation failed (non-fatal): %s", exc)
+    else:
+        logger.info("LLM mode disabled; skipping expert cluster validation.")
+
     plots = generate_plots(adata)
     return _build_result(
         adata,
@@ -123,6 +146,8 @@ async def analyze(
         n_hvgs,
         pipeline_params.model_name,
         plots,
+        cluster_validations,
+        dataset_metadata,
     )
 
 
@@ -133,6 +158,8 @@ def _build_result(
     n_hvgs: int,
     model_name: str,
     plots: dict[str, str],
+    cluster_validations: list[ClusterValidation],
+    dataset_metadata: DatasetMetadata | None,
 ) -> PipelineResult:
     """Assemble a PipelineResult from a fully annotated AnnData object.
 
@@ -142,6 +169,9 @@ def _build_result(
         n_cells_after_qc: Cell count after QC filtering.
         n_hvgs: Number of highly variable genes selected.
         model_name: CellTypist model filename that was used.
+        plots: Base64-encoded UMAP plots.
+        cluster_validations: LLM expert review per cluster.
+        dataset_metadata: Organism/tissue metadata extracted from the h5ad file.
 
     Returns:
         PipelineResult ready for serialization.
@@ -173,6 +203,8 @@ def _build_result(
         cells=cells,
         marker_genes=marker_genes,
         plots=plots,
+        cluster_validations=cluster_validations,
+        dataset_metadata=dataset_metadata,
     )
 
 

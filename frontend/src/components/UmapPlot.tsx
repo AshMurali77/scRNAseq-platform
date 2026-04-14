@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import type { CellMetadata } from '../types/pipeline'
 
 // Tableau-20 palette, then HSL fallback for many cell types
