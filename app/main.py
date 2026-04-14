@@ -9,6 +9,8 @@ from app.models.schemas import (
     ClusterSummary,
     ClusterValidation,
     DatasetMetadata,
+    DERequest,
+    DEResult,
     MarkerGene,
     ModelSelection,
     ModelSelectionRequest,
@@ -16,8 +18,11 @@ from app.models.schemas import (
     PipelineResult,
     QueryRequest,
     QueryResponse,
+    TrajectoryRequest,
+    TrajectoryResult,
 )
 from app.pipeline.annotate import run_celltypist, run_marker_genes, select_model
+from app.pipeline.de import run_differential_expression
 from app.pipeline.query import answer_query
 from app.pipeline.metadata import extract_and_check_metadata
 from app.pipeline.plot import generate_plots
@@ -25,9 +30,11 @@ from app.pipeline.cluster import run_cluster
 from app.pipeline.normalize import run_normalize
 from app.pipeline.qc import run_qc
 from app.pipeline.reduce import run_reduce
+from app.pipeline.trajectory import run_trajectory
 from app.pipeline.validate import validate_cluster_labels
 from app.utils.errors import PipelineStepError
 from app.utils.io import load_h5ad, stage_upload
+from app.utils.session import load_session, save_session
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -129,6 +136,13 @@ async def analyze(
     finally:
         tmp_path.unlink(missing_ok=True)
 
+    # Cache AnnData for downstream analyses — non-fatal if disk write fails
+    session_id: str | None = None
+    try:
+        session_id = save_session(adata)
+    except Exception as exc:
+        logger.warning("Failed to save session (downstream analyses unavailable): %s", exc)
+
     # Expert validation — only when LLM mode is active; non-fatal
     cluster_validations: list[ClusterValidation] = []
     if pipeline_params.use_llm:
@@ -151,7 +165,68 @@ async def analyze(
         plots,
         cluster_validations,
         dataset_metadata,
+        session_id,
     )
+
+
+@app.post("/downstream/de", response_model=DEResult)
+async def de_endpoint(body: DERequest) -> DEResult:
+    """Run pairwise Wilcoxon DE between two Leiden clusters.
+
+    Loads the cached AnnData by session_id and compares gene expression
+    between group1 and group2 using all genes from adata.raw.
+
+    Args:
+        body: DERequest with session_id, group1, and group2 cluster IDs.
+
+    Returns:
+        DEResult with ranked gene list (positive logFC = upregulated in group1).
+
+    Raises:
+        404: If the session_id is not found.
+        400: If cluster IDs are invalid or DE fails.
+    """
+    try:
+        adata = load_session(body.session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    try:
+        genes = run_differential_expression(adata, body.group1, body.group2)
+    except PipelineStepError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return DEResult(group1=body.group1, group2=body.group2, genes=genes)
+
+
+@app.post("/downstream/trajectory", response_model=TrajectoryResult)
+async def trajectory_endpoint(body: TrajectoryRequest) -> TrajectoryResult:
+    """Run PAGA trajectory inference on the cached AnnData.
+
+    Computes cluster-cluster connectivity using the kNN neighbor graph
+    stored in the session. Returns nodes and edges for frontend rendering.
+
+    Args:
+        body: TrajectoryRequest with session_id.
+
+    Returns:
+        TrajectoryResult with nodes (clusters) and edges (connectivity).
+
+    Raises:
+        404: If the session_id is not found.
+        400: If PAGA fails or there are too few clusters.
+    """
+    try:
+        adata = load_session(body.session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    try:
+        nodes, edges = run_trajectory(adata)
+    except PipelineStepError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return TrajectoryResult(nodes=nodes, edges=edges)
 
 
 @app.post("/query", response_model=QueryResponse)
@@ -189,6 +264,7 @@ def _build_result(
     plots: dict[str, str],
     cluster_validations: list[ClusterValidation],
     dataset_metadata: DatasetMetadata | None,
+    session_id: str | None = None,
 ) -> PipelineResult:
     """Assemble a PipelineResult from a fully annotated AnnData object.
 
@@ -201,6 +277,7 @@ def _build_result(
         plots: Base64-encoded UMAP plots.
         cluster_validations: LLM expert review per cluster.
         dataset_metadata: Organism/tissue metadata extracted from the h5ad file.
+        session_id: UUID of the cached AnnData for downstream analyses, or None.
 
     Returns:
         PipelineResult ready for serialization.
@@ -234,6 +311,7 @@ def _build_result(
         plots=plots,
         cluster_validations=cluster_validations,
         dataset_metadata=dataset_metadata,
+        session_id=session_id,
     )
 
 

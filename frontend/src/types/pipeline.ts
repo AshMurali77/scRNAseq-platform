@@ -112,4 +112,47 @@ export interface PipelineResult {
   plots: Record<string, string>
   cluster_validations: ClusterValidation[]
   dataset_metadata: DatasetMetadata | null
+  session_id: string | null
+}
+
+// ── Downstream analyses ────────────────────────────────────────────────────
+
+export interface DEGene {
+  gene: string
+  score: number
+  log_fold_change: number
+  pval_adj: number
+}
+
+export interface DERequest {
+  session_id: string
+  group1: string
+  group2: string
+}
+
+export interface DEResult {
+  group1: string
+  group2: string
+  genes: DEGene[]
+}
+
+export interface TrajectoryNode {
+  cluster_id: string
+  label: string
+  size: number
+}
+
+export interface TrajectoryEdge {
+  source: string
+  target: string
+  weight: number
+}
+
+export interface TrajectoryRequest {
+  session_id: string
+}
+
+export interface TrajectoryResult {
+  nodes: TrajectoryNode[]
+  edges: TrajectoryEdge[]
 }

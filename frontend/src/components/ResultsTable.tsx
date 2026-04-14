@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import type { CellMetadata, ClusterValidation, ModelSelection, PipelineResult } from '../types/pipeline'
 import UmapPlot from './UmapPlot'
 
-const PAGE_SIZE = 50
+const PAGE_SIZE = 10
 
 interface Props {
   result: PipelineResult
@@ -23,6 +23,7 @@ const STATUS_CONFIG: Record<
 // ------------------------------------------------------------------ main
 
 export default function ResultsTable({ result, modelSelection }: Props) {
+  const [clusterPage, setClusterPage] = useState(0)
   const [page, setPage] = useState(0)
   const [filterCluster, setFilterCluster] = useState('')
   const [filterCellType, setFilterCellType] = useState('')
@@ -75,6 +76,9 @@ export default function ResultsTable({ result, modelSelection }: Props) {
       setPage(0)
     }
   }
+
+  const clusterTotalPages = Math.ceil(result.cluster_summaries.length / PAGE_SIZE)
+  const visibleClusters = result.cluster_summaries.slice(clusterPage * PAGE_SIZE, (clusterPage + 1) * PAGE_SIZE)
 
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE)
   const visible: CellMetadata[] = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
@@ -159,7 +163,7 @@ export default function ResultsTable({ result, modelSelection }: Props) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 bg-white">
-              {result.cluster_summaries.map((cs) => {
+              {visibleClusters.map((cs) => {
                 const v = validationMap[cs.cluster_id]
                 const cfg = v ? STATUS_CONFIG[v.status] : null
                 const isExpanded = expandedCluster === cs.cluster_id
@@ -209,6 +213,17 @@ export default function ResultsTable({ result, modelSelection }: Props) {
             </tbody>
           </table>
         </div>
+        {clusterTotalPages > 1 && (
+          <div className="mt-3 flex items-center justify-between text-xs text-gray-600">
+            <span>
+              Showing {clusterPage * PAGE_SIZE + 1}–{Math.min((clusterPage + 1) * PAGE_SIZE, result.cluster_summaries.length)} of {result.cluster_summaries.length} clusters
+            </span>
+            <div className="flex gap-2">
+              <PageButton onClick={() => setClusterPage((p) => p - 1)} disabled={clusterPage === 0}>Previous</PageButton>
+              <PageButton onClick={() => setClusterPage((p) => p + 1)} disabled={clusterPage === clusterTotalPages - 1}>Next</PageButton>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* UMAP plots */}

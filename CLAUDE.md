@@ -6,12 +6,19 @@ datasets (.h5ad files), runs a scanpy preprocessing pipeline, and
 returns annotated cell type results. Built as a learning project
 with iterative phases.
 
-## Current state (Phase 5 complete)
-- FastAPI backend: three endpoints — `POST /select-model`, `POST /analyze`, `POST /query`
+## Current state (Phase 6 complete)
+- FastAPI backend: five endpoints — `POST /select-model`, `POST /analyze`, `POST /query`,
+  `POST /downstream/de`, `POST /downstream/trajectory`
   - `/select-model` runs LLM or rule-based model selection before any file upload
-  - `/analyze` accepts a .h5ad upload, runs the full scanpy pipeline, returns JSON
+  - `/analyze` accepts a .h5ad upload, runs the full scanpy pipeline, returns JSON;
+    saves processed AnnData to `/tmp/scrnaseq_sessions/<uuid>.h5ad` and returns
+    `session_id` for downstream analyses
   - `/query` accepts a natural-language question + conversation history + compressed
     context; returns an LLM-generated answer about the pipeline results
+  - `/downstream/de` loads the cached AnnData by `session_id` and runs pairwise
+    Wilcoxon DE between two Leiden clusters
+  - `/downstream/trajectory` loads the cached AnnData and runs PAGA trajectory
+    inference; returns cluster nodes and connectivity edges
 - React + Tailwind frontend:
   - LLM / Rule-based toggle in the upload form gates ALL LLM calls (model
     selection + expert validation + chat); rule-based mode makes zero API calls
@@ -30,6 +37,9 @@ with iterative phases.
     clicking a per-cell table row highlights that cell on both UMAPs simultaneously
   - Per-cell table: compact rows, Cluster / Annotation / Cell Type columns,
     cluster + cell type filter dropdowns, paginated (50 per page)
+  - Downstream analysis panel (shown when `session_id` is present): two sections —
+    Differential Expression (cluster pickers + ranked gene tables) and Trajectory
+    Inference (PAGA network Canvas + connectivity table)
   - Chat panel (LLM mode only): conversational interface below results; supports
     multi-turn questions about clusters, marker genes, and annotations; assistant
     responses rendered as GFM markdown (bold, lists, tables, code blocks)
@@ -43,8 +53,8 @@ with iterative phases.
 - Pipeline: scanpy, anndata, celltypist
 - Frontend: React, TypeScript, Tailwind CSS, Vite
 - Frontend deps: `react-markdown`, `remark-gfm` (markdown rendering in chat)
-- Serving: Vite dev server (:5173) proxies `/analyze`, `/select-model`, `/query`
-  to FastAPI (:8000)
+- Serving: Vite dev server (:5173) proxies `/analyze`, `/select-model`, `/query`,
+  `/downstream` to FastAPI (:8000)
 - Storage: local filesystem for now, S3 later
 
 ## Key files
@@ -52,7 +62,9 @@ with iterative phases.
 - `app/models/schemas.py` — Pydantic models: `ModelSelectionRequest`,
   `ModelSelection`, `PipelineParams`, `PipelineResult`, `CellMetadata`,
   `ClusterSummary`, `MarkerGene`, `QCParams`, `ClusterValidation`, `DatasetMetadata`,
-  `ConversationMessage`, `QueryContext`, `QueryRequest`, `QueryResponse`
+  `ConversationMessage`, `QueryContext`, `QueryRequest`, `QueryResponse`,
+  `DEGene`, `DERequest`, `DEResult`, `TrajectoryNode`, `TrajectoryEdge`,
+  `TrajectoryRequest`, `TrajectoryResult`
 - `app/pipeline/annotate.py` — `select_model()`, `_llm_select_model()`,
   `_rule_based_select_model()`, `run_celltypist()`, `run_marker_genes()`
 - `app/pipeline/validate.py` — `validate_cluster_labels()`: batches all clusters
@@ -62,6 +74,13 @@ with iterative phases.
   thinking), supports multi-turn via `conversation_history`
 - `app/pipeline/metadata.py` — `extract_and_check_metadata()`: reads h5ad uns/obs
   for organism/tissue, normalises scientific names, flags organism mismatches
+- `app/pipeline/de.py` — `run_differential_expression(adata, group1, group2)`:
+  subsets to two clusters, runs Wilcoxon via scanpy with `use_raw=True` (all genes),
+  returns top 50 up in each direction
+- `app/pipeline/trajectory.py` — `run_trajectory(adata)`: runs `sc.tl.paga()`,
+  extracts connectivity matrix, returns nodes + edges with weight ≥ 0.05
+- `app/utils/session.py` — `save_session(adata) → str`, `load_session(session_id) → AnnData`;
+  persists to `/tmp/scrnaseq_sessions/<uuid>.h5ad`
 - `app/pipeline/plot.py` — `generate_plots()` returns base64 UMAPs; non-fatal
 - `app/pipeline/qc.py` — `run_qc(skip=False)`: skip=True bypasses cell filtering
 - `app/pipeline/normalize.py` — auto-detects log-normalization via
@@ -77,10 +96,13 @@ with iterative phases.
   cluster table with validation badges, interactive Canvas UMAPs, per-cell table
 - `frontend/src/components/UmapPlot.tsx` — Canvas-based UMAP; ResizeObserver
   for responsive sizing; highlighted cell drawn last with amber+white halo
+- `frontend/src/components/DownstreamPanel.tsx` — two-section panel: DE (cluster
+  dropdowns, ranked gene tables split by direction) and Trajectory (PAGA Canvas
+  network + connectivity table); only rendered when `session_id` is non-null
 - `frontend/src/components/ChatPanel.tsx` — multi-turn chat UI; builds
   `QueryContext` via `useMemo` from result prop; assistant messages rendered
   with `ReactMarkdown` + `remark-gfm` (tables, bold, lists, code, headings)
-- `frontend/src/services/api.ts` — `selectModel()`, `analyze()`, `queryPipeline()`
+- `frontend/src/services/api.ts` — `selectModel()`, `analyze()`, `queryPipeline()`, `runDE()`, `runTrajectory()`
 - `frontend/src/types/pipeline.ts` — TypeScript interfaces mirroring backend schemas
 - `frontend/vite.config.ts` — proxy config (must include all backend routes)
 - `.env` / `.env.example` — `ANTHROPIC_API_KEY=`
@@ -227,9 +249,35 @@ so `ChatPanel` can include them in the `QueryContext`.
 - Raise descriptive errors at each pipeline step so failures are traceable
 - No notebooks — all code in .py files
 
+## Downstream analyses (Phase 6)
+
+### Session caching
+- After `/analyze` completes, `save_session(adata)` writes the fully processed AnnData
+  to `/tmp/scrnaseq_sessions/<uuid>.h5ad` and returns a UUID `session_id`
+- `session_id` is included in `PipelineResult`; `None` if the write fails (non-fatal)
+- `DownstreamPanel` is only rendered when `session_id` is non-null
+- Session files are not explicitly expired; the OS cleans up `/tmp` on reboot
+
+### Differential expression (`/downstream/de`)
+- `DERequest`: `session_id`, `group1` (Leiden cluster ID), `group2` (reference)
+- Loads AnnData from session, subsets to two clusters, runs Wilcoxon with `use_raw=True`
+  so all genes (not just HVGs) are tested
+- Returns up to 50 genes upregulated in each direction, sorted by score
+- `DEResult`: `group1`, `group2`, `genes: list[DEGene]` (gene, score, logFC, pval_adj)
+- Frontend: two cluster dropdowns (showing ID + cell-type label), Run button; results
+  split into two tables — positive logFC (group1 up) and negative logFC (group2 up)
+
+### Trajectory inference (`/downstream/trajectory`)
+- `TrajectoryRequest`: `session_id`
+- Loads AnnData, calls `sc.tl.paga(adata, groups='leiden')`, extracts connectivity matrix
+  from `adata.uns['paga']['connectivities']`; edges with weight < 0.05 are filtered out
+- `TrajectoryResult`: `nodes: list[TrajectoryNode]` (cluster_id, label, size),
+  `edges: list[TrajectoryEdge]` (source, target, weight) sorted by weight desc
+- Frontend: PAGA network Canvas (circular layout, edge thickness ∝ weight, node size ∝
+  cluster size, Tableau-20 colors) + connectivity table with inline bar chart
+
 ## Phase roadmap
 
-### Phase 6 — downstream analysis selection
-- Based on the annotated dataset, offer selectable downstream analyses:
-  differential expression between conditions, trajectory inference if data supports it
-- Each analysis is an independent module triggerable from the UI
+### Phase 7 — (future)
+- Async job queue for long-running analyses
+- S3 storage for sessions

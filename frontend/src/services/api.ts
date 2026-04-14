@@ -1,4 +1,4 @@
-import type { ModelSelection, ModelSelectionRequest, PipelineResult, QueryRequest, QueryResponse } from '../types/pipeline'
+import type { DERequest, DEResult, ModelSelection, ModelSelectionRequest, PipelineResult, QueryRequest, QueryResponse, TrajectoryRequest, TrajectoryResult } from '../types/pipeline'
 
 export async function selectModel(request: ModelSelectionRequest): Promise<ModelSelection> {
   const response = await fetch('/select-model', {
@@ -40,6 +40,48 @@ export async function analyze(
 
   if (!response.ok) {
     let message = `Request failed with status ${response.status}`
+    try {
+      const error = await response.json()
+      message = error.detail ?? message
+    } catch {
+      // empty or non-JSON body
+    }
+    throw new Error(message)
+  }
+
+  return response.json()
+}
+
+export async function runDE(request: DERequest): Promise<DEResult> {
+  const response = await fetch('/downstream/de', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+
+  if (!response.ok) {
+    let message = `DE analysis failed with status ${response.status}`
+    try {
+      const error = await response.json()
+      message = error.detail ?? message
+    } catch {
+      // empty or non-JSON body
+    }
+    throw new Error(message)
+  }
+
+  return response.json()
+}
+
+export async function runTrajectory(request: TrajectoryRequest): Promise<TrajectoryResult> {
+  const response = await fetch('/downstream/trajectory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+
+  if (!response.ok) {
+    let message = `Trajectory analysis failed with status ${response.status}`
     try {
       const error = await response.json()
       message = error.detail ?? message

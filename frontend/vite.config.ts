@@ -8,6 +8,7 @@ export default defineConfig({
       '/analyze': 'http://127.0.0.1:8000',
       '/select-model': 'http://127.0.0.1:8000',
       '/query': 'http://127.0.0.1:8000',
+      '/downstream': 'http://127.0.0.1:8000',
     },
   },
 })

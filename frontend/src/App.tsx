@@ -5,6 +5,7 @@ import UploadForm from './components/UploadForm'
 import ResultsTable from './components/ResultsTable'
 import StatusBanner from './components/StatusBanner'
 import ChatPanel from './components/ChatPanel'
+import DownstreamPanel from './components/DownstreamPanel'
 
 type AppState =
   | { status: 'idle' }
@@ -101,14 +102,46 @@ export default function App() {
   const isLoading =
     state.status === 'selecting_model' || state.status === 'loading'
 
+  const isDone = state.status === 'done'
+
+  function scrollTo(id: string) {
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="border-b border-gray-200 bg-white px-6 py-4">
-        <h1 className="text-lg text-center font-semibold text-gray-900">scRNA-seq Annotation Platform</h1>
+      <header className="sticky top-0 z-50 border-b border-gray-200 bg-white">
+        <div className="px-6 py-4">
+          <h1 className="text-lg text-center font-semibold text-gray-900">scRNA-seq Annotation Platform</h1>
+        </div>
+        {isDone && (
+          <nav className="border-t border-gray-100 px-6 py-2 flex justify-center gap-1">
+            {(
+              [
+                { id: 'section-upload',     label: 'Upload' },
+                { id: 'section-results',    label: 'Results' },
+                ...(state.status === 'done' && state.result.session_id
+                  ? [{ id: 'section-downstream', label: 'Downstream' }]
+                  : []),
+                ...(state.status === 'done' && state.useLlm
+                  ? [{ id: 'section-chat', label: 'Ask Claude' }]
+                  : []),
+              ] as { id: string; label: string }[]
+            ).map(({ id, label }) => (
+              <button
+                key={id}
+                onClick={() => scrollTo(id)}
+                className="rounded-full px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition"
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
+        )}
       </header>
 
       <main className="mx-auto max-w-8xl px-6 py-8 flex flex-col gap-6">
-        <div className="rounded-lg border border-gray-200 bg-white p-6">
+        <div id="section-upload" className="rounded-lg border border-gray-200 bg-white p-6">
           <h2 className="mb-4 text-sm font-medium text-gray-700">Upload dataset</h2>
           <UploadForm onSubmit={handleSubmit} disabled={isLoading} />
         </div>
@@ -148,13 +181,26 @@ export default function App() {
 
         {state.status === 'done' && (
           <>
-            <div className="rounded-lg border border-gray-200 bg-white p-6">
+            <div id="section-results" className="rounded-lg border border-gray-200 bg-white p-6">
               <h2 className="mb-4 text-sm font-medium text-gray-700">Results</h2>
               <ResultsTable result={state.result} modelSelection={state.modelSelection} />
             </div>
 
+            {state.result.session_id && (
+              <div id="section-downstream" className="rounded-lg border border-gray-200 bg-white p-6">
+                <h2 className="mb-1 text-sm font-medium text-gray-700">Downstream Analysis</h2>
+                <p className="mb-4 text-xs text-gray-400">
+                  Run differential expression or trajectory inference on your annotated dataset.
+                </p>
+                <DownstreamPanel
+                  sessionId={state.result.session_id}
+                  clusterSummaries={state.result.cluster_summaries}
+                />
+              </div>
+            )}
+
             {state.useLlm && (
-              <div className="rounded-lg border border-gray-200 bg-white p-6">
+              <div id="section-chat" className="rounded-lg border border-gray-200 bg-white p-6">
                 <h2 className="mb-1 text-sm font-medium text-gray-700">Ask about your results</h2>
                 <p className="mb-4 text-xs text-gray-400">
                   Powered by Claude — has full access to your cluster annotations, marker genes, and expert validation.

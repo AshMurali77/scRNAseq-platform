@@ -178,6 +178,100 @@ class QueryResponse(BaseModel):
     answer: str
 
 
+class DEGene(BaseModel):
+    """A single gene result from pairwise differential expression.
+
+    Attributes:
+        gene: Gene symbol.
+        score: Wilcoxon test statistic (higher = more significant).
+        log_fold_change: Log2 fold-change (positive = higher in group1).
+        pval_adj: Benjamini-Hochberg adjusted p-value.
+    """
+
+    gene: str
+    score: float
+    log_fold_change: float
+    pval_adj: float
+
+
+class DERequest(BaseModel):
+    """Request body for POST /downstream/de.
+
+    Attributes:
+        session_id: UUID returned by /analyze identifying the cached AnnData.
+        group1: Leiden cluster ID for the first group.
+        group2: Leiden cluster ID for the second group (reference).
+    """
+
+    session_id: str
+    group1: str
+    group2: str
+
+
+class DEResult(BaseModel):
+    """Response from POST /downstream/de.
+
+    Attributes:
+        group1: First cluster ID (positive logFC genes are upregulated here).
+        group2: Reference cluster ID.
+        genes: Ranked list of DE genes.
+    """
+
+    group1: str
+    group2: str
+    genes: list[DEGene]
+
+
+class TrajectoryNode(BaseModel):
+    """A cluster node in the PAGA trajectory graph.
+
+    Attributes:
+        cluster_id: Leiden cluster identifier.
+        label: Majority-voted CellTypist cell-type label.
+        size: Number of cells in this cluster.
+    """
+
+    cluster_id: str
+    label: str
+    size: int
+
+
+class TrajectoryEdge(BaseModel):
+    """A weighted edge between two clusters in the PAGA graph.
+
+    Attributes:
+        source: Source cluster ID.
+        target: Target cluster ID.
+        weight: PAGA connectivity score (0–1); higher means stronger connection.
+    """
+
+    source: str
+    target: str
+    weight: float
+
+
+class TrajectoryRequest(BaseModel):
+    """Request body for POST /downstream/trajectory.
+
+    Attributes:
+        session_id: UUID returned by /analyze identifying the cached AnnData.
+    """
+
+    session_id: str
+
+
+class TrajectoryResult(BaseModel):
+    """Response from POST /downstream/trajectory.
+
+    Attributes:
+        nodes: One node per Leiden cluster.
+        edges: Cluster-cluster connections with weight above threshold.
+    """
+
+    nodes: list[TrajectoryNode]
+    edges: list[TrajectoryEdge]
+
+
 class PipelineResult(BaseModel):
     n_cells_input: int
     n_cells_after_qc: int
@@ -199,4 +293,8 @@ class PipelineResult(BaseModel):
     dataset_metadata: DatasetMetadata | None = Field(
         None,
         description="Organism/tissue metadata extracted from the h5ad file.",
+    )
+    session_id: str | None = Field(
+        None,
+        description="UUID for the cached AnnData session; enables downstream analyses.",
     )
